@@ -1,0 +1,112 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isOwner() {
+      return isSignedIn() && userDoc().data.role == "owner";
+    }
+
+    function isManager() {
+      return isSignedIn() && userDoc().data.role == "manager";
+    }
+
+    function isAdminLike() {
+      return isOwner() || isManager();
+    }
+
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function incomingMemberBelongsToUser() {
+      return isSignedIn() && request.resource.data.uid == request.auth.uid;
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSelf(userId);
+      allow update: if isSelf(userId) || isOwner();
+      allow delete: if isOwner();
+    }
+
+    match /meta/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isOwner();
+    }
+
+    match /members/{memberId} {
+      allow read: if isSignedIn();
+      allow create: if isAdminLike() || incomingMemberBelongsToUser();
+      allow update: if isAdminLike() || incomingMemberBelongsToUser();
+      allow delete: if isAdminLike();
+    }
+
+    match /meals/{docId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdminLike();
+    }
+
+    match /bazar/{docId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdminLike();
+    }
+
+    match /utilities/{docId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdminLike();
+    }
+
+    match /deposits/{docId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdminLike();
+    }
+
+    match /credits/{docId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdminLike();
+    }
+
+    match /reports/{docId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdminLike();
+    }
+
+    match /notifications/{docId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdminLike();
+    }
+
+    match /settings/{docId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isOwner();
+    }
+
+    match /monthly_closing/{docId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdminLike();
+    }
+
+    match /activity_logs/{docId} {
+      allow read: if isAdminLike();
+      allow create: if isSignedIn();
+      allow update, delete: if isOwner();
+    }
+
+    match /change_requests/{docId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isOwner();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

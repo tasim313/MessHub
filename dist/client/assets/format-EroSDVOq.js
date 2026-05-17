@@ -1,0 +1,1 @@
+function e(t){return Number.isFinite(t)?"৳"+Math.round(t).toLocaleString("en-BD"):"৳0"}function n(t=new Date){return`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}`}function r(t=new Date){return`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`}export{e as b,r as d,n as y};
