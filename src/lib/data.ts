@@ -16,6 +16,12 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 
+export function withoutUndefined<T extends Record<string, unknown>>(data: T): T {
+  return Object.fromEntries(
+    Object.entries(data).filter(([, value]) => value !== undefined),
+  ) as T;
+}
+
 export interface Member {
   id: string;
   name: string;
@@ -134,11 +140,11 @@ export function useCollection<T>(path: string, constraints: QueryConstraint[] = 
 }
 
 export async function addDocTo<T extends Record<string, unknown>>(path: string, data: T) {
-  return addDoc(collection(db, path), { ...data, createdAt: Date.now(), createdAtServer: serverTimestamp() });
+  return addDoc(collection(db, path), withoutUndefined({ ...data, createdAt: Date.now(), createdAtServer: serverTimestamp() }));
 }
 
 export async function updateDocIn<T extends Record<string, unknown>>(path: string, id: string, data: T) {
-  return updateDoc(doc(db, path, id), data);
+  return updateDoc(doc(db, path, id), withoutUndefined(data));
 }
 
 export async function deleteDocFrom(path: string, id: string) {
@@ -146,7 +152,7 @@ export async function deleteDocFrom(path: string, id: string) {
 }
 
 export async function setDocIn<T extends Record<string, unknown>>(path: string, id: string, data: T) {
-  return setDoc(doc(db, path, id), data, { merge: true });
+  return setDoc(doc(db, path, id), withoutUndefined(data), { merge: true });
 }
 
 export async function findMemberByUid(uid: string) {
