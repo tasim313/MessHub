@@ -5,8 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Home, Loader2 } from "lucide-react";
+import type { Role } from "@/lib/firebase";
 
 export const Route = createFileRoute("/signup")({
   component: SignupPage,
@@ -18,6 +20,7 @@ function SignupPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState<Extract<Role, "member" | "manager">>("member");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -28,7 +31,7 @@ function SignupPage() {
     e.preventDefault();
     setBusy(true);
     try {
-      await signup(email, password, name);
+      await signup(email, password, name, role);
       toast.success("Account created successfully.");
     } catch (err) {
       toast.error((err as Error).message);
@@ -46,7 +49,7 @@ function SignupPage() {
           </div>
           <h1 className="text-3xl font-bold tracking-tight">Create your account</h1>
           <p className="text-sm text-muted-foreground">
-            First account becomes Owner. Later accounts join as Members.
+            First account becomes Owner. Later accounts can join as Member or Manager.
           </p>
         </div>
         <Card className="p-6 shadow-xl border-border/60">
@@ -62,6 +65,18 @@ function SignupPage() {
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
               <Input id="password" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Role</Label>
+              <Select value={role} onValueChange={(value) => setRole(value as Extract<Role, "member" | "manager">)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="member">Member</SelectItem>
+                  <SelectItem value="manager">Manager</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <Button type="submit" className="w-full" disabled={busy}>
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create account"}

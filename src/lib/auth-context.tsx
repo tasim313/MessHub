@@ -17,7 +17,7 @@ import {
 } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db, getSecondaryAuth, googleProvider, type AppUser, type Role, type UserStatus } from "./firebase";
-import { findMemberByUid, setDocIn, type Member } from "./data";
+import { findMemberByUid, setDocIn, withoutUndefined, type Member } from "./data";
 
 interface AuthCtx {
   user: User | null;
@@ -56,7 +56,7 @@ async function loadOrCreateProfile(u: User, nameOverride?: string, requestedRole
       photoURL: u.photoURL,
       createdAt: Date.now(),
     };
-    await setDoc(ref, { ...profile, createdAtServer: serverTimestamp() });
+    await setDoc(ref, withoutUndefined({ ...profile, createdAtServer: serverTimestamp() }));
     if (isFirst) {
       await setDoc(doc(db, "meta", "owner"), { uid: u.uid, at: serverTimestamp() });
     }
@@ -79,7 +79,7 @@ async function loadOrCreateProfile(u: User, nameOverride?: string, requestedRole
     await setDocIn("members", u.uid, memberPayload);
   }
 
-  await setDoc(ref, {
+  await setDoc(ref, withoutUndefined({
     ...profile,
     email: u.email,
     name: nameOverride || u.displayName || profile.name,
@@ -89,7 +89,7 @@ async function loadOrCreateProfile(u: User, nameOverride?: string, requestedRole
     lastLoginAt: Date.now(),
     lastLoginAtServer: serverTimestamp(),
     lastLoginDevice: typeof window !== "undefined" ? navigator.userAgent : "server",
-  }, { merge: true });
+  }), { merge: true });
 
   return {
     ...profile,
