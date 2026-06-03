@@ -35,6 +35,11 @@ export const Route = createFileRoute("/_authed/reports")({
   component: ReportsPage,
 });
 
+function pdfMoney(value: number) {
+  if (!Number.isFinite(value)) return "BDT 0";
+  return `BDT ${Math.round(value).toLocaleString("en-BD")}`;
+}
+
 function ReportsPage() {
   const [ym, setYm] = useState(ymKey());
   const { data: members } = useCollection<Member>("members");
@@ -65,12 +70,12 @@ function ReportsPage() {
     doc.setFontSize(18);
     doc.text(`Monthly Report — ${ym}`, 14, 18);
     doc.setFontSize(11);
-    doc.text(`Total Bazar: ${bdt(summary.totalBazar)}`, 14, 30);
-    doc.text(`Total Utilities: ${bdt(summary.totalUtilities)}`, 14, 37);
+    doc.text(`Total Bazar: ${pdfMoney(summary.totalBazar)}`, 14, 30);
+    doc.text(`Total Utilities: ${pdfMoney(summary.totalUtilities)}`, 14, 37);
     doc.text(`Total Meals: ${summary.totalMeals}`, 14, 44);
-    doc.text(`Meal Rate: ${bdt(summary.mealRate)}/meal`, 14, 51);
-    doc.text(`Total Deposits: ${bdt(summary.totalDeposits)}`, 14, 58);
-    doc.text(`Staff Cost: ${bdt(summary.totalStaffCost)}`, 14, 65);
+    doc.text(`Meal Rate: ${pdfMoney(summary.mealRate)}/meal`, 14, 51);
+    doc.text(`Total Deposits: ${pdfMoney(summary.totalDeposits)}`, 14, 58);
+    doc.text(`Staff Cost: ${pdfMoney(summary.totalStaffCost)}`, 14, 65);
     autoTable(doc, {
       startY: 73,
       head: [
@@ -90,14 +95,14 @@ function ReportsPage() {
       body: summary.perMember.map((p) => [
         p.memberName,
         p.meals,
-        bdt(p.mealCost),
-        bdt(p.rentShare),
-        bdt(p.utilityShare),
-        bdt(p.staffShare),
-        bdt(p.previousDue),
-        bdt(p.totalDue),
-        bdt(p.deposited),
-        bdt(p.balance),
+        pdfMoney(p.mealCost),
+        pdfMoney(p.rentShare),
+        pdfMoney(p.utilityShare),
+        pdfMoney(p.staffShare),
+        pdfMoney(p.previousDue),
+        pdfMoney(p.totalDue),
+        pdfMoney(p.deposited),
+        pdfMoney(p.balance),
       ]),
       styles: { fontSize: 9 },
       headStyles: { fillColor: [22, 163, 74] },
