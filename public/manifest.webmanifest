@@ -1,0 +1,21 @@
+{
+  "name": "MessHub ERP",
+  "short_name": "MessHub",
+  "description": "Bangladesh-ready mess ERP for meals, bazar, rooms, staff payroll, deposits, and reports.",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#16a34a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "finance", "productivity"],
+  "lang": "en-BD"
+}
