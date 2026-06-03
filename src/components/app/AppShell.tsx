@@ -11,6 +11,8 @@ import {
   Wallet,
   FileBarChart,
   UserPlus,
+  BedDouble,
+  UsersRound,
   LogOut,
   Moon,
   Sun,
@@ -22,14 +24,66 @@ import { useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { Role } from "@/lib/firebase";
 
-const nav: { to: string; label: string; icon: typeof LayoutDashboard; roles: Role[] }[] = [
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["owner", "manager", "member"] },
-  { to: "/meals", label: "Meals", icon: Utensils, roles: ["owner", "manager", "member"] },
-  { to: "/bazar", label: "Bazar", icon: ShoppingBasket, roles: ["owner", "manager", "member"] },
-  { to: "/utilities", label: "Utilities", icon: Zap, roles: ["owner", "manager", "member"] },
-  { to: "/deposits", label: "Deposits", icon: Wallet, roles: ["owner", "manager", "member"] },
-  { to: "/members", label: "Members", icon: Users, roles: ["owner", "manager"] },
-  { to: "/reports", label: "Reports", icon: FileBarChart, roles: ["owner", "manager"] },
+const nav: {
+  to: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+  roles: Role[];
+}[] = [
+  {
+    to: "/dashboard",
+    label: "Dashboard",
+    icon: LayoutDashboard,
+    roles: ["owner", "manager", "member"],
+  },
+  {
+    to: "/meals",
+    label: "Meals",
+    icon: Utensils,
+    roles: ["owner", "manager", "member"],
+  },
+  {
+    to: "/bazar",
+    label: "Bazar",
+    icon: ShoppingBasket,
+    roles: ["owner", "manager", "member"],
+  },
+  {
+    to: "/utilities",
+    label: "Utilities",
+    icon: Zap,
+    roles: ["owner", "manager", "member"],
+  },
+  {
+    to: "/deposits",
+    label: "Deposits",
+    icon: Wallet,
+    roles: ["owner", "manager", "member"],
+  },
+  {
+    to: "/rooms",
+    label: "Rooms & Beds",
+    icon: BedDouble,
+    roles: ["owner", "manager"],
+  },
+  {
+    to: "/staff",
+    label: "Staff",
+    icon: UsersRound,
+    roles: ["owner", "manager"],
+  },
+  {
+    to: "/members",
+    label: "Members",
+    icon: Users,
+    roles: ["owner", "manager"],
+  },
+  {
+    to: "/reports",
+    label: "Reports",
+    icon: FileBarChart,
+    roles: ["owner", "manager"],
+  },
   { to: "/admin", label: "Users & Admin", icon: UserPlus, roles: ["owner"] },
 ];
 
@@ -60,7 +114,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
       <nav className="flex-1 space-y-1 p-3">
         {visible.map((item) => {
-          const active = location.pathname === item.to || location.pathname.startsWith(item.to + "/");
+          const active =
+            location.pathname === item.to ||
+            location.pathname.startsWith(item.to + "/");
           const Icon = item.icon;
           return (
             <Link
@@ -71,7 +127,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                 active
                   ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
               )}
             >
               <Icon className="h-4 w-4" />
@@ -88,15 +144,31 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{profile.name}</div>
-              <div className="text-xs text-muted-foreground capitalize">{profile.role}</div>
+              <div className="text-xs text-muted-foreground capitalize">
+                {profile.role}
+              </div>
             </div>
           </div>
         )}
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" className="flex-1" onClick={toggle}>
-            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onClick={toggle}
+          >
+            {theme === "dark" ? (
+              <Sun className="h-4 w-4" />
+            ) : (
+              <Moon className="h-4 w-4" />
+            )}
           </Button>
-          <Button variant="outline" size="sm" className="flex-1" onClick={onLogout}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onClick={onLogout}
+          >
             <LogOut className="h-4 w-4" />
           </Button>
         </div>
@@ -111,7 +183,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* Mobile drawer */}
       {open && (
         <div className="fixed inset-0 z-50 md:hidden">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} />
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setOpen(false)}
+          />
           <div className="relative h-full w-64">
             {Sidebar}
             <button

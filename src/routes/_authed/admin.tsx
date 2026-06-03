@@ -4,16 +4,46 @@ import { PageHeader } from "@/components/app/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/lib/auth-context";
-import { ShieldCheck, Clock3, History, CheckCircle2, XCircle, UserPlus, UserX, Ban, RotateCcw } from "lucide-react";
+import {
+  ShieldCheck,
+  Clock3,
+  History,
+  CheckCircle2,
+  XCircle,
+  UserPlus,
+  UserX,
+  Ban,
+  RotateCcw,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { orderBy, setDocIn, useCollection, type ActivityLog, type ChangeRequest, type Member } from "@/lib/data";
+import {
+  orderBy,
+  setDocIn,
+  useCollection,
+  type ActivityLog,
+  type ChangeRequest,
+  type Member,
+} from "@/lib/data";
 import { applyApprovedRequest, rejectRequest } from "@/lib/workflow";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { AppUser, Role, UserStatus } from "@/lib/firebase";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 export const Route = createFileRoute("/_authed/admin")({
   component: AdminPage,
@@ -31,10 +61,19 @@ function statusLabel(status?: UserStatus, active?: boolean) {
 
 function AdminPage() {
   const { profile, adminCreateUser } = useAuth();
-  const { data: requests } = useCollection<ChangeRequest>("change_requests", [orderBy("createdAt", "desc")]);
-  const { data: logs } = useCollection<ActivityLog>("activity_logs", [orderBy("createdAt", "desc")]);
-  const { data: users, loading: usersLoading } = useCollection<ManagedUser>("users", [orderBy("createdAt", "desc")]);
-  const { data: members } = useCollection<Member>("members", [orderBy("joinedAt", "desc")]);
+  const { data: requests } = useCollection<ChangeRequest>("change_requests", [
+    orderBy("createdAt", "desc"),
+  ]);
+  const { data: logs } = useCollection<ActivityLog>("activity_logs", [
+    orderBy("createdAt", "desc"),
+  ]);
+  const { data: users, loading: usersLoading } = useCollection<ManagedUser>(
+    "users",
+    [orderBy("createdAt", "desc")],
+  );
+  const { data: members } = useCollection<Member>("members", [
+    orderBy("joinedAt", "desc"),
+  ]);
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -45,7 +84,7 @@ function AdminPage() {
 
   const memberMap = useMemo(
     () => new Map(members.map((member) => [member.uid || member.id, member])),
-    [members]
+    [members],
   );
 
   if (profile?.role !== "owner") {
@@ -73,7 +112,12 @@ function AdminPage() {
     e.preventDefault();
     setCreating(true);
     try {
-      await adminCreateUser({ email: email.trim(), password, name: name.trim(), role });
+      await adminCreateUser({
+        email: email.trim(),
+        password,
+        name: name.trim(),
+        role,
+      });
       toast.success("User account created successfully.");
       setName("");
       setEmail("");
@@ -86,7 +130,10 @@ function AdminPage() {
     }
   };
 
-  const handleUserStatus = async (userItem: ManagedUser, nextStatus: UserStatus) => {
+  const handleUserStatus = async (
+    userItem: ManagedUser,
+    nextStatus: UserStatus,
+  ) => {
     if (userItem.uid === profile.uid && nextStatus !== "active") {
       toast.error("You cannot suspend or remove your own owner account.");
       return;
@@ -108,6 +155,12 @@ function AdminPage() {
       if (relatedMember) {
         await setDocIn("members", relatedMember.id, {
           active: nextActive,
+          status:
+            nextStatus === "active"
+              ? "active"
+              : nextStatus === "suspended"
+                ? "suspended"
+                : "inactive",
           role: userItem.role,
           uid: userItem.uid,
           name: userItem.name,
@@ -120,7 +173,7 @@ function AdminPage() {
           ? "User reactivated."
           : nextStatus === "suspended"
             ? "User suspended."
-            : "User removed from MessHub."
+            : "User removed from MessHub.",
       );
     } catch (error) {
       toast.error((error as Error).message);
@@ -150,7 +203,9 @@ function AdminPage() {
             <div className="flex items-center gap-3">
               <Clock3 className="h-5 w-5 text-primary" />
               <div>
-                <div className="text-sm text-muted-foreground">Pending approvals</div>
+                <div className="text-sm text-muted-foreground">
+                  Pending approvals
+                </div>
                 <div className="font-semibold">{pending.length}</div>
               </div>
             </div>
@@ -159,7 +214,9 @@ function AdminPage() {
             <div className="flex items-center gap-3">
               <History className="h-5 w-5 text-primary" />
               <div>
-                <div className="text-sm text-muted-foreground">Tracked actions</div>
+                <div className="text-sm text-muted-foreground">
+                  Tracked actions
+                </div>
                 <div className="font-semibold">{logs.length}</div>
               </div>
             </div>
@@ -173,16 +230,28 @@ function AdminPage() {
               <h3 className="font-semibold">Add user</h3>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
-              Create a new MessHub account with email and password directly from the dashboard.
+              Create a new MessHub account with email and password directly from
+              the dashboard.
             </p>
             <form onSubmit={handleCreateUser} className="mt-5 space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="admin-user-name">Full name</Label>
-                <Input id="admin-user-name" required value={name} onChange={(e) => setName(e.target.value)} />
+                <Input
+                  id="admin-user-name"
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="admin-user-email">Email</Label>
-                <Input id="admin-user-email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+                <Input
+                  id="admin-user-email"
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="admin-user-password">Password</Label>
@@ -197,13 +266,22 @@ function AdminPage() {
               </div>
               <div className="space-y-2">
                 <Label>User role</Label>
-                <Select value={role} onValueChange={(value) => setRole(value as Role)}>
+                <Select
+                  value={role}
+                  onValueChange={(value) => setRole(value as Role)}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Select role" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="member">Member</SelectItem>
                     <SelectItem value="manager">Manager</SelectItem>
+                    <SelectItem value="accountant">Accountant</SelectItem>
+                    <SelectItem value="bazar_manager">Bazar manager</SelectItem>
+                    <SelectItem value="meal_manager">Meal manager</SelectItem>
+                    <SelectItem value="cook">Cook</SelectItem>
+                    <SelectItem value="guest">Guest</SelectItem>
+                    <SelectItem value="auditor">Auditor</SelectItem>
                     <SelectItem value="owner">Owner</SelectItem>
                   </SelectContent>
                 </Select>
@@ -213,7 +291,9 @@ function AdminPage() {
                 {creating ? "Creating..." : "Create user"}
               </Button>
               <p className="text-xs text-muted-foreground">
-                Suspend and remove below are app-level access controls. They block MessHub access immediately, even though browser-only Firebase cannot fully disable Auth accounts.
+                Suspend and remove below are app-level access controls. They
+                block MessHub access immediately, even though browser-only
+                Firebase cannot fully disable Auth accounts.
               </p>
             </form>
           </Card>
@@ -221,7 +301,8 @@ function AdminPage() {
           <Card className="p-5">
             <h3 className="font-semibold">User management</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Suspend, reactivate, or remove any non-owner access from the dashboard.
+              Suspend, reactivate, or remove any non-owner access from the
+              dashboard.
             </p>
             <div className="mt-4">
               <Table>
@@ -236,26 +317,37 @@ function AdminPage() {
                 <TableBody>
                   {usersLoading ? (
                     <TableRow>
-                      <TableCell colSpan={4} className="text-sm text-muted-foreground">
+                      <TableCell
+                        colSpan={4}
+                        className="text-sm text-muted-foreground"
+                      >
                         Loading users...
                       </TableCell>
                     </TableRow>
                   ) : users.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={4} className="text-sm text-muted-foreground">
+                      <TableCell
+                        colSpan={4}
+                        className="text-sm text-muted-foreground"
+                      >
                         No users found.
                       </TableCell>
                     </TableRow>
                   ) : (
                     users.map((userItem) => {
-                      const currentStatus = (userItem.status || (userItem.active === false ? "suspended" : "active")) as UserStatus;
+                      const currentStatus = (userItem.status ||
+                        (userItem.active === false
+                          ? "suspended"
+                          : "active")) as UserStatus;
                       const busy = actingUid === userItem.uid;
 
                       return (
                         <TableRow key={userItem.uid}>
                           <TableCell>
                             <div className="font-medium">{userItem.name}</div>
-                            <div className="text-xs text-muted-foreground">{userItem.email}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {userItem.email}
+                            </div>
                           </TableCell>
                           <TableCell>
                             <Badge variant="outline" className="capitalize">
@@ -277,23 +369,28 @@ function AdminPage() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex flex-wrap justify-end gap-2">
-                              {currentStatus !== "suspended" && currentStatus !== "removed" && (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  disabled={busy}
-                                  onClick={() => handleUserStatus(userItem, "suspended")}
-                                >
-                                  <Ban className="mr-1 h-4 w-4" />
-                                  Suspend
-                                </Button>
-                              )}
+                              {currentStatus !== "suspended" &&
+                                currentStatus !== "removed" && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      handleUserStatus(userItem, "suspended")
+                                    }
+                                  >
+                                    <Ban className="mr-1 h-4 w-4" />
+                                    Suspend
+                                  </Button>
+                                )}
                               {currentStatus !== "active" && (
                                 <Button
                                   size="sm"
                                   variant="outline"
                                   disabled={busy}
-                                  onClick={() => handleUserStatus(userItem, "active")}
+                                  onClick={() =>
+                                    handleUserStatus(userItem, "active")
+                                  }
                                 >
                                   <RotateCcw className="mr-1 h-4 w-4" />
                                   Reactivate
@@ -304,7 +401,9 @@ function AdminPage() {
                                   size="sm"
                                   variant="destructive"
                                   disabled={busy}
-                                  onClick={() => handleUserStatus(userItem, "removed")}
+                                  onClick={() =>
+                                    handleUserStatus(userItem, "removed")
+                                  }
                                 >
                                   <UserX className="mr-1 h-4 w-4" />
                                   Remove
@@ -325,11 +424,14 @@ function AdminPage() {
         <Card className="p-5">
           <h3 className="font-semibold">Approval inbox</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Members and managers can submit add, edit, and delete requests. Owner approves or rejects them here.
+            Members and managers can submit add, edit, and delete requests.
+            Owner approves or rejects them here.
           </p>
           <div className="mt-4 space-y-3">
             {pending.length === 0 ? (
-              <div className="rounded-lg border p-4 text-sm text-muted-foreground">No pending requests right now.</div>
+              <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                No pending requests right now.
+              </div>
             ) : (
               pending.map((request) => (
                 <div key={request.id} className="rounded-lg border p-4">
@@ -382,11 +484,14 @@ function AdminPage() {
         <Card className="p-5">
           <h3 className="font-semibold">Activity tracking</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Every request submission and approval decision is stored in `activity_logs`.
+            Every request submission and approval decision is stored in
+            `activity_logs`.
           </p>
           <div className="mt-4 space-y-2">
             {logs.length === 0 ? (
-              <div className="rounded-lg border p-4 text-sm text-muted-foreground">No tracked actions yet.</div>
+              <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                No tracked actions yet.
+              </div>
             ) : (
               logs.slice(0, 20).map((log) => (
                 <div key={log.id} className="rounded-lg border p-3">
@@ -396,7 +501,9 @@ function AdminPage() {
                     <Badge>{log.actorRole}</Badge>
                   </div>
                   <div className="mt-2 text-sm">{log.message}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{log.actorName}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {log.actorName}
+                  </div>
                 </div>
               ))
             )}
