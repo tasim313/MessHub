@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="MessHub ERP">
+  <rect width="512" height="512" rx="96" fill="#16a34a"/>
+  <path d="M128 346V190c0-18 14-32 32-32h192c18 0 32 14 32 32v156" fill="none" stroke="#f8fafc" stroke-width="28" stroke-linecap="round"/>
+  <path d="M154 346h212M184 346v-78c0-14 11-25 25-25h46c14 0 25 11 25 25v78M308 346v-96h38" fill="none" stroke="#f8fafc" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="197" cy="202" r="17" fill="#dcfce7"/>
+  <circle cx="256" cy="202" r="17" fill="#dcfce7"/>
+  <circle cx="315" cy="202" r="17" fill="#dcfce7"/>
+</svg>
