@@ -14,6 +14,8 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthedUtilitiesRouteImport } from './routes/_authed/utilities'
+import { Route as AuthedStaffRouteImport } from './routes/_authed/staff'
+import { Route as AuthedRoomsRouteImport } from './routes/_authed/rooms'
 import { Route as AuthedReportsRouteImport } from './routes/_authed/reports'
 import { Route as AuthedMembersRouteImport } from './routes/_authed/members'
 import { Route as AuthedMealsRouteImport } from './routes/_authed/meals'
@@ -44,6 +46,16 @@ const IndexRoute = IndexRouteImport.update({
 const AuthedUtilitiesRoute = AuthedUtilitiesRouteImport.update({
   id: '/utilities',
   path: '/utilities',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedStaffRoute = AuthedStaffRouteImport.update({
+  id: '/staff',
+  path: '/staff',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedRoomsRoute = AuthedRoomsRouteImport.update({
+  id: '/rooms',
+  path: '/rooms',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedReportsRoute = AuthedReportsRouteImport.update({
@@ -93,6 +105,8 @@ export interface FileRoutesByFullPath {
   '/meals': typeof AuthedMealsRoute
   '/members': typeof AuthedMembersRoute
   '/reports': typeof AuthedReportsRoute
+  '/rooms': typeof AuthedRoomsRoute
+  '/staff': typeof AuthedStaffRoute
   '/utilities': typeof AuthedUtilitiesRoute
 }
 export interface FileRoutesByTo {
@@ -106,6 +120,8 @@ export interface FileRoutesByTo {
   '/meals': typeof AuthedMealsRoute
   '/members': typeof AuthedMembersRoute
   '/reports': typeof AuthedReportsRoute
+  '/rooms': typeof AuthedRoomsRoute
+  '/staff': typeof AuthedStaffRoute
   '/utilities': typeof AuthedUtilitiesRoute
 }
 export interface FileRoutesById {
@@ -121,6 +137,8 @@ export interface FileRoutesById {
   '/_authed/meals': typeof AuthedMealsRoute
   '/_authed/members': typeof AuthedMembersRoute
   '/_authed/reports': typeof AuthedReportsRoute
+  '/_authed/rooms': typeof AuthedRoomsRoute
+  '/_authed/staff': typeof AuthedStaffRoute
   '/_authed/utilities': typeof AuthedUtilitiesRoute
 }
 export interface FileRouteTypes {
@@ -136,6 +154,8 @@ export interface FileRouteTypes {
     | '/meals'
     | '/members'
     | '/reports'
+    | '/rooms'
+    | '/staff'
     | '/utilities'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -149,6 +169,8 @@ export interface FileRouteTypes {
     | '/meals'
     | '/members'
     | '/reports'
+    | '/rooms'
+    | '/staff'
     | '/utilities'
   id:
     | '__root__'
@@ -163,6 +185,8 @@ export interface FileRouteTypes {
     | '/_authed/meals'
     | '/_authed/members'
     | '/_authed/reports'
+    | '/_authed/rooms'
+    | '/_authed/staff'
     | '/_authed/utilities'
   fileRoutesById: FileRoutesById
 }
@@ -208,6 +232,20 @@ declare module '@tanstack/react-router' {
       path: '/utilities'
       fullPath: '/utilities'
       preLoaderRoute: typeof AuthedUtilitiesRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/staff': {
+      id: '/_authed/staff'
+      path: '/staff'
+      fullPath: '/staff'
+      preLoaderRoute: typeof AuthedStaffRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/rooms': {
+      id: '/_authed/rooms'
+      path: '/rooms'
+      fullPath: '/rooms'
+      preLoaderRoute: typeof AuthedRoomsRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/reports': {
@@ -270,6 +308,8 @@ interface AuthedRouteChildren {
   AuthedMealsRoute: typeof AuthedMealsRoute
   AuthedMembersRoute: typeof AuthedMembersRoute
   AuthedReportsRoute: typeof AuthedReportsRoute
+  AuthedRoomsRoute: typeof AuthedRoomsRoute
+  AuthedStaffRoute: typeof AuthedStaffRoute
   AuthedUtilitiesRoute: typeof AuthedUtilitiesRoute
 }
 
@@ -281,6 +321,8 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedMealsRoute: AuthedMealsRoute,
   AuthedMembersRoute: AuthedMembersRoute,
   AuthedReportsRoute: AuthedReportsRoute,
+  AuthedRoomsRoute: AuthedRoomsRoute,
+  AuthedStaffRoute: AuthedStaffRoute,
   AuthedUtilitiesRoute: AuthedUtilitiesRoute,
 }
 

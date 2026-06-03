@@ -16,8 +16,21 @@ import {
   type User,
 } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
-import { auth, db, getSecondaryAuth, googleProvider, type AppUser, type Role, type UserStatus } from "./firebase";
-import { findMemberByUid, setDocIn, withoutUndefined, type Member } from "./data";
+import {
+  auth,
+  db,
+  getSecondaryAuth,
+  googleProvider,
+  type AppUser,
+  type Role,
+  type UserStatus,
+} from "./firebase";
+import {
+  findMemberByUid,
+  setDocIn,
+  withoutUndefined,
+  type Member,
+} from "./data";
 
 interface AuthCtx {
   user: User | null;
@@ -25,8 +38,18 @@ interface AuthCtx {
   profileError: string | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  signup: (email: string, password: string, name: string, requestedRole?: Role) => Promise<void>;
-  adminCreateUser: (payload: { email: string; password: string; name: string; role: Role }) => Promise<void>;
+  signup: (
+    email: string,
+    password: string,
+    name: string,
+    requestedRole?: Role,
+  ) => Promise<void>;
+  adminCreateUser: (payload: {
+    email: string;
+    password: string;
+    name: string;
+    role: Role;
+  }) => Promise<void>;
   loginGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
@@ -35,7 +58,11 @@ interface AuthCtx {
 
 const Ctx = createContext<AuthCtx | null>(null);
 
-async function loadOrCreateProfile(u: User, nameOverride?: string, requestedRole?: Role): Promise<AppUser> {
+async function loadOrCreateProfile(
+  u: User,
+  nameOverride?: string,
+  requestedRole?: Role,
+): Promise<AppUser> {
   const ref = doc(db, "users", u.uid);
   const snap = await getDoc(ref);
   let profile: AppUser;
@@ -45,7 +72,11 @@ async function loadOrCreateProfile(u: User, nameOverride?: string, requestedRole
   } else {
     const ownerSnap = await getDoc(doc(db, "meta", "owner"));
     const isFirst = !ownerSnap.exists();
-    const role: Role = isFirst ? "owner" : requestedRole === "manager" ? "manager" : "member";
+    const role: Role = isFirst
+      ? "owner"
+      : requestedRole === "manager"
+        ? "manager"
+        : "member";
     profile = {
       uid: u.uid,
       email: u.email,
@@ -56,9 +87,15 @@ async function loadOrCreateProfile(u: User, nameOverride?: string, requestedRole
       photoURL: u.photoURL,
       createdAt: Date.now(),
     };
-    await setDoc(ref, withoutUndefined({ ...profile, createdAtServer: serverTimestamp() }));
+    await setDoc(
+      ref,
+      withoutUndefined({ ...profile, createdAtServer: serverTimestamp() }),
+    );
     if (isFirst) {
-      await setDoc(doc(db, "meta", "owner"), { uid: u.uid, at: serverTimestamp() });
+      await setDoc(doc(db, "meta", "owner"), {
+        uid: u.uid,
+        at: serverTimestamp(),
+      });
     }
   }
 
@@ -69,7 +106,10 @@ async function loadOrCreateProfile(u: User, nameOverride?: string, requestedRole
     phone: profile.phone,
     role: profile.role,
     uid: u.uid,
-    active: profile.status !== "removed" && profile.status !== "suspended" && profile.active !== false,
+    active:
+      profile.status !== "removed" &&
+      profile.status !== "suspended" &&
+      profile.active !== false,
     joinedAt: profile.createdAt || Date.now(),
   };
 
@@ -79,17 +119,25 @@ async function loadOrCreateProfile(u: User, nameOverride?: string, requestedRole
     await setDocIn("members", u.uid, memberPayload);
   }
 
-  await setDoc(ref, withoutUndefined({
-    ...profile,
-    email: u.email,
-    name: nameOverride || u.displayName || profile.name,
-    photoURL: u.photoURL,
-    status: (profile.status || "active") as UserStatus,
-    active: profile.status === "removed" || profile.status === "suspended" ? false : profile.active ?? true,
-    lastLoginAt: Date.now(),
-    lastLoginAtServer: serverTimestamp(),
-    lastLoginDevice: typeof window !== "undefined" ? navigator.userAgent : "server",
-  }), { merge: true });
+  await setDoc(
+    ref,
+    withoutUndefined({
+      ...profile,
+      email: u.email,
+      name: nameOverride || u.displayName || profile.name,
+      photoURL: u.photoURL,
+      status: (profile.status || "active") as UserStatus,
+      active:
+        profile.status === "removed" || profile.status === "suspended"
+          ? false
+          : (profile.active ?? true),
+      lastLoginAt: Date.now(),
+      lastLoginAtServer: serverTimestamp(),
+      lastLoginDevice:
+        typeof window !== "undefined" ? navigator.userAgent : "server",
+    }),
+    { merge: true },
+  );
 
   return {
     ...profile,
@@ -97,7 +145,10 @@ async function loadOrCreateProfile(u: User, nameOverride?: string, requestedRole
     name: nameOverride || u.displayName || profile.name,
     photoURL: u.photoURL,
     status: profile.status || "active",
-    active: profile.status === "removed" || profile.status === "suspended" ? false : profile.active ?? true,
+    active:
+      profile.status === "removed" || profile.status === "suspended"
+        ? false
+        : (profile.active ?? true),
   };
 }
 
@@ -113,13 +164,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (u) {
         try {
           const p = await loadOrCreateProfile(u);
-          if (p.status === "suspended" || p.status === "removed" || p.active === false) {
+          if (
+            p.status === "suspended" ||
+            p.status === "removed" ||
+            p.active === false
+          ) {
             await signOut(auth);
             setProfile(null);
             setProfileError(
               p.status === "removed"
                 ? "Your account has been removed by the admin."
-                : "Your account has been suspended by the admin."
+                : "Your account has been suspended by the admin.",
             );
             setLoading(false);
             return;
@@ -161,7 +216,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     adminCreateUser: async ({ email, password, name, role }) => {
       const secondaryAuth = getSecondaryAuth();
-      const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+      const cred = await createUserWithEmailAndPassword(
+        secondaryAuth,
+        email,
+        password,
+      );
       await updateProfile(cred.user, { displayName: name });
       await loadOrCreateProfile(cred.user, name, role);
       await signOut(secondaryAuth);
@@ -178,7 +237,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     can: (action) => {
       if (!profile) return false;
       if (profile.role === "owner") return true;
-      if (profile.role === "manager") return action !== "all";
+      if (
+        ["manager", "accountant", "bazar_manager", "meal_manager"].includes(
+          profile.role,
+        )
+      )
+        return action !== "all";
       return action === "view";
     },
   };

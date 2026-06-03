@@ -16,7 +16,9 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 
-export function withoutUndefined<T extends Record<string, unknown>>(data: T): T {
+export function withoutUndefined<T extends Record<string, unknown>>(
+  data: T,
+): T {
   return Object.fromEntries(
     Object.entries(data).filter(([, value]) => value !== undefined),
   ) as T;
@@ -27,9 +29,34 @@ export interface Member {
   name: string;
   email?: string | null;
   phone?: string;
-  role: "owner" | "manager" | "member";
+  role:
+    | "owner"
+    | "manager"
+    | "accountant"
+    | "bazar_manager"
+    | "meal_manager"
+    | "cook"
+    | "member"
+    | "guest"
+    | "auditor";
   uid?: string;
   active: boolean;
+  photoUrl?: string;
+  nid?: string;
+  occupation?: string;
+  emergencyContact?: string;
+  joiningDate?: string;
+  leavingDate?: string;
+  roomId?: string;
+  roomName?: string;
+  bedNo?: string;
+  depositAmount?: number;
+  monthlyRent?: number;
+  mealStatus?: "active" | "hold" | "cancelled";
+  securityDeposit?: number;
+  previousDue?: number;
+  notes?: string;
+  status?: "active" | "inactive" | "moved_out" | "suspended" | "pending";
   joinedAt?: number;
 }
 
@@ -38,7 +65,7 @@ export interface MealEntry {
   memberId: string;
   memberName: string;
   date: string; // YYYY-MM-DD
-  ym: string;   // YYYY-MM
+  ym: string; // YYYY-MM
   breakfast: number;
   lunch: number;
   dinner: number;
@@ -83,6 +110,39 @@ export interface Deposit {
   createdAt?: number;
 }
 
+export interface Room {
+  id: string;
+  messName: string;
+  branchName?: string;
+  buildingName: string;
+  floorName: string;
+  roomNo: string;
+  roomType: "single" | "double" | "triple" | "shared" | "family" | "staff";
+  totalBeds: number;
+  monthlyRent: number;
+  status: "available" | "occupied" | "maintenance" | "reserved";
+  notes?: string;
+  createdAt?: number;
+}
+
+export interface Staff {
+  id: string;
+  name: string;
+  phone?: string;
+  role: "manager" | "cook" | "cleaner" | "security" | "helper" | "accountant";
+  salary: number;
+  advance?: number;
+  overtime?: number;
+  bonus?: number;
+  leaveDays?: number;
+  attendanceDays?: number;
+  paidAmount?: number;
+  status: "active" | "inactive" | "on_leave";
+  joinedAt?: string;
+  notes?: string;
+  createdAt?: number;
+}
+
 export interface ChangeRequest {
   id: string;
   collectionName: string;
@@ -116,22 +176,27 @@ export interface ActivityLog {
   createdAt?: number;
 }
 
-export function useCollection<T>(path: string, constraints: QueryConstraint[] = []) {
+export function useCollection<T>(
+  path: string,
+  constraints: QueryConstraint[] = [],
+) {
   const [data, setData] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
-  const key = JSON.stringify(constraints.map((c) => (c as { type?: string }).type || ""));
+  const key = JSON.stringify(
+    constraints.map((c) => (c as { type?: string }).type || ""),
+  );
   useEffect(() => {
     const q = query(collection(db, path), ...constraints);
     const unsub = onSnapshot(
       q,
       (snap) => {
-        setData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as T)));
+        setData(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as T));
         setLoading(false);
       },
       (err) => {
         console.error("snapshot error", path, err);
         setLoading(false);
-      }
+      },
     );
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -139,11 +204,25 @@ export function useCollection<T>(path: string, constraints: QueryConstraint[] = 
   return { data, loading };
 }
 
-export async function addDocTo<T extends Record<string, unknown>>(path: string, data: T) {
-  return addDoc(collection(db, path), withoutUndefined({ ...data, createdAt: Date.now(), createdAtServer: serverTimestamp() }));
+export async function addDocTo<T extends Record<string, unknown>>(
+  path: string,
+  data: T,
+) {
+  return addDoc(
+    collection(db, path),
+    withoutUndefined({
+      ...data,
+      createdAt: Date.now(),
+      createdAtServer: serverTimestamp(),
+    }),
+  );
 }
 
-export async function updateDocIn<T extends Record<string, unknown>>(path: string, id: string, data: T) {
+export async function updateDocIn<T extends Record<string, unknown>>(
+  path: string,
+  id: string,
+  data: T,
+) {
   return updateDoc(doc(db, path, id), withoutUndefined(data));
 }
 
@@ -151,12 +230,18 @@ export async function deleteDocFrom(path: string, id: string) {
   return deleteDoc(doc(db, path, id));
 }
 
-export async function setDocIn<T extends Record<string, unknown>>(path: string, id: string, data: T) {
+export async function setDocIn<T extends Record<string, unknown>>(
+  path: string,
+  id: string,
+  data: T,
+) {
   return setDoc(doc(db, path, id), withoutUndefined(data), { merge: true });
 }
 
 export async function findMemberByUid(uid: string) {
-  const snap = await getDocs(query(collection(db, "members"), where("uid", "==", uid)));
+  const snap = await getDocs(
+    query(collection(db, "members"), where("uid", "==", uid)),
+  );
   const first = snap.docs[0];
   return first ? ({ id: first.id, ...first.data() } as Member) : null;
 }

@@ -26,7 +26,16 @@ export function getSecondaryAuth() {
   return getAuth(secondaryApp);
 }
 
-export type Role = "owner" | "manager" | "member";
+export type Role =
+  | "owner"
+  | "manager"
+  | "accountant"
+  | "bazar_manager"
+  | "meal_manager"
+  | "cook"
+  | "member"
+  | "guest"
+  | "auditor";
 export type UserStatus = "active" | "suspended" | "removed";
 
 export interface AppUser {
