@@ -1,4 +1,69 @@
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "rent_charges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "memberId", "mode": "ASCENDING" },
+        { "fieldPath": "month", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "meals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "memberId", "mode": "ASCENDING" },
+        { "fieldPath": "date", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "memberId", "mode": "ASCENDING" },
+        { "fieldPath": "ym", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "deposits",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "memberId", "mode": "ASCENDING" },
+        { "fieldPath": "ym", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ledgers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "memberId", "mode": "ASCENDING" },
+        { "fieldPath": "ym", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "monthly_closing",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "month", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "utility_allocations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "utilityId", "mode": "ASCENDING" },
+        { "fieldPath": "memberId", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "staff_allocations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "staffId", "mode": "ASCENDING" },
+        { "fieldPath": "memberId", "mode": "ASCENDING" },
+        { "fieldPath": "month", "mode": "ASCENDING" }
+      ]
+    }
+  ],
   "fieldOverrides": []
 }

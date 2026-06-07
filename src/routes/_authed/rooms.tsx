@@ -98,6 +98,18 @@ function RoomsPage() {
     return map;
   }, [members]);
 
+  const roomMembers = useMemo(() => {
+    const map = new Map<string, Member[]>();
+    members.filter(m => m.active).forEach(m => {
+      if (m.roomId) {
+        const existing = map.get(m.roomId) || [];
+        existing.push(m);
+        map.set(m.roomId, existing);
+      }
+    });
+    return map;
+  }, [members]);
+
   const filtered = rooms.filter((room) => {
     const haystack =
       `${room.messName} ${room.branchName || ""} ${room.buildingName} ${room.floorName} ${room.roomNo} ${room.status}`.toLowerCase();

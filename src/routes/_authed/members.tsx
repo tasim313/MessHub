@@ -56,6 +56,22 @@ function MembersPage() {
     depositAmount: 0,
     securityDeposit: 0,
     previousDue: 0,
+    services: [
+      { type: "rent", enabled: true },
+      { type: "meals", enabled: true },
+      { type: "internet", enabled: false },
+      { type: "electricity", enabled: false },
+      { type: "gas", enabled: false },
+      { type: "water", enabled: false },
+      { type: "cooking_staff", enabled: false },
+      { type: "cleaning_staff", enabled: false },
+      { type: "security_staff", enabled: false },
+      { type: "laundry", enabled: false },
+      { type: "parking", enabled: false },
+      { type: "generator", enabled: false },
+      { type: "maintenance", enabled: false },
+      { type: "other_services", enabled: false },
+    ],
   });
 
   const reset = () => {
@@ -71,6 +87,22 @@ function MembersPage() {
       depositAmount: 0,
       securityDeposit: 0,
       previousDue: 0,
+      services: [
+        { type: "rent", enabled: true },
+        { type: "meals", enabled: true },
+        { type: "internet", enabled: false },
+        { type: "electricity", enabled: false },
+        { type: "gas", enabled: false },
+        { type: "water", enabled: false },
+        { type: "cooking_staff", enabled: false },
+        { type: "cleaning_staff", enabled: false },
+        { type: "security_staff", enabled: false },
+        { type: "laundry", enabled: false },
+        { type: "parking", enabled: false },
+        { type: "generator", enabled: false },
+        { type: "maintenance", enabled: false },
+        { type: "other_services", enabled: false },
+      ],
     });
     setEditing(null);
   };
@@ -99,6 +131,22 @@ function MembersPage() {
       previousDue: m.previousDue || 0,
       status: m.status || (m.active ? "active" : "inactive"),
       notes: m.notes || "",
+      services: m.services || [
+        { type: "rent", enabled: true },
+        { type: "meals", enabled: true },
+        { type: "internet", enabled: false },
+        { type: "electricity", enabled: false },
+        { type: "gas", enabled: false },
+        { type: "water", enabled: false },
+        { type: "cooking_staff", enabled: false },
+        { type: "cleaning_staff", enabled: false },
+        { type: "security_staff", enabled: false },
+        { type: "laundry", enabled: false },
+        { type: "parking", enabled: false },
+        { type: "generator", enabled: false },
+        { type: "maintenance", enabled: false },
+        { type: "other_services", enabled: false },
+      ],
     });
     setOpen(true);
   };
@@ -431,6 +479,39 @@ function MembersPage() {
                     <Label htmlFor="active">
                       Active (counts in monthly split)
                     </Label>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Service Subscriptions</Label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(form.services || []).map((service) => (
+                        <div
+                          key={service.type}
+                          className="flex items-center gap-2"
+                        >
+                          <input
+                            type="checkbox"
+                            id={`service-${service.type}`}
+                            checked={service.enabled}
+                            onChange={(e) =>
+                              setForm({
+                                ...form,
+                                services: (form.services || []).map((s) =>
+                                  s.type === service.type
+                                    ? { ...s, enabled: e.target.checked }
+                                    : s,
+                                ),
+                              })
+                            }
+                          />
+                          <Label
+                            htmlFor={`service-${service.type}`}
+                            className="text-sm capitalize"
+                          >
+                            {service.type.replace(/_/g, " ")}
+                          </Label>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                   <DialogFooter>
                     <Button type="submit">{editing ? "Save" : "Add"}</Button>
