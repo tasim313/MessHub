@@ -19,6 +19,11 @@ import {
   Menu,
   Home,
   X,
+  BadgePercent,
+  Banknote,
+  BookText,
+  Lock,
+  Receipt,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
@@ -61,6 +66,30 @@ const nav: {
     roles: ["owner", "manager", "member"],
   },
   {
+    to: "/credits",
+    label: "Credits",
+    icon: BadgePercent,
+    roles: ["owner", "manager"],
+  },
+  {
+    to: "/payments",
+    label: "Payments",
+    icon: Banknote,
+    roles: ["owner", "manager"],
+  },
+  {
+    to: "/charges",
+    label: "Charges",
+    icon: Receipt,
+    roles: ["owner", "manager"],
+  },
+  {
+    to: "/ledger",
+    label: "Ledger",
+    icon: BookText,
+    roles: ["owner", "manager", "member"],
+  },
+  {
     to: "/rooms",
     label: "Rooms & Beds",
     icon: BedDouble,
@@ -82,6 +111,12 @@ const nav: {
     to: "/reports",
     label: "Reports",
     icon: FileBarChart,
+    roles: ["owner", "manager"],
+  },
+  {
+    to: "/monthly-closing",
+    label: "Monthly Closing",
+    icon: Lock,
     roles: ["owner", "manager"],
   },
   { to: "/admin", label: "Users & Admin", icon: UserPlus, roles: ["owner"] },

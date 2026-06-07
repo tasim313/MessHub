@@ -17,10 +17,15 @@ import { Route as AuthedUtilitiesRouteImport } from './routes/_authed/utilities'
 import { Route as AuthedStaffRouteImport } from './routes/_authed/staff'
 import { Route as AuthedRoomsRouteImport } from './routes/_authed/rooms'
 import { Route as AuthedReportsRouteImport } from './routes/_authed/reports'
+import { Route as AuthedPaymentsRouteImport } from './routes/_authed/payments'
+import { Route as AuthedMonthlyClosingRouteImport } from './routes/_authed/monthly-closing'
 import { Route as AuthedMembersRouteImport } from './routes/_authed/members'
 import { Route as AuthedMealsRouteImport } from './routes/_authed/meals'
+import { Route as AuthedLedgerRouteImport } from './routes/_authed/ledger'
 import { Route as AuthedDepositsRouteImport } from './routes/_authed/deposits'
 import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
+import { Route as AuthedCreditsRouteImport } from './routes/_authed/credits'
+import { Route as AuthedChargesRouteImport } from './routes/_authed/charges'
 import { Route as AuthedBazarRouteImport } from './routes/_authed/bazar'
 import { Route as AuthedAdminRouteImport } from './routes/_authed/admin'
 
@@ -63,6 +68,16 @@ const AuthedReportsRoute = AuthedReportsRouteImport.update({
   path: '/reports',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedPaymentsRoute = AuthedPaymentsRouteImport.update({
+  id: '/payments',
+  path: '/payments',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedMonthlyClosingRoute = AuthedMonthlyClosingRouteImport.update({
+  id: '/monthly-closing',
+  path: '/monthly-closing',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedMembersRoute = AuthedMembersRouteImport.update({
   id: '/members',
   path: '/members',
@@ -73,6 +88,11 @@ const AuthedMealsRoute = AuthedMealsRouteImport.update({
   path: '/meals',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedLedgerRoute = AuthedLedgerRouteImport.update({
+  id: '/ledger',
+  path: '/ledger',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedDepositsRoute = AuthedDepositsRouteImport.update({
   id: '/deposits',
   path: '/deposits',
@@ -81,6 +101,16 @@ const AuthedDepositsRoute = AuthedDepositsRouteImport.update({
 const AuthedDashboardRoute = AuthedDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedCreditsRoute = AuthedCreditsRouteImport.update({
+  id: '/credits',
+  path: '/credits',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedChargesRoute = AuthedChargesRouteImport.update({
+  id: '/charges',
+  path: '/charges',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedBazarRoute = AuthedBazarRouteImport.update({
@@ -100,10 +130,15 @@ export interface FileRoutesByFullPath {
   '/signup': typeof SignupRoute
   '/admin': typeof AuthedAdminRoute
   '/bazar': typeof AuthedBazarRoute
+  '/charges': typeof AuthedChargesRoute
+  '/credits': typeof AuthedCreditsRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/deposits': typeof AuthedDepositsRoute
+  '/ledger': typeof AuthedLedgerRoute
   '/meals': typeof AuthedMealsRoute
   '/members': typeof AuthedMembersRoute
+  '/monthly-closing': typeof AuthedMonthlyClosingRoute
+  '/payments': typeof AuthedPaymentsRoute
   '/reports': typeof AuthedReportsRoute
   '/rooms': typeof AuthedRoomsRoute
   '/staff': typeof AuthedStaffRoute
@@ -115,10 +150,15 @@ export interface FileRoutesByTo {
   '/signup': typeof SignupRoute
   '/admin': typeof AuthedAdminRoute
   '/bazar': typeof AuthedBazarRoute
+  '/charges': typeof AuthedChargesRoute
+  '/credits': typeof AuthedCreditsRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/deposits': typeof AuthedDepositsRoute
+  '/ledger': typeof AuthedLedgerRoute
   '/meals': typeof AuthedMealsRoute
   '/members': typeof AuthedMembersRoute
+  '/monthly-closing': typeof AuthedMonthlyClosingRoute
+  '/payments': typeof AuthedPaymentsRoute
   '/reports': typeof AuthedReportsRoute
   '/rooms': typeof AuthedRoomsRoute
   '/staff': typeof AuthedStaffRoute
@@ -132,10 +172,15 @@ export interface FileRoutesById {
   '/signup': typeof SignupRoute
   '/_authed/admin': typeof AuthedAdminRoute
   '/_authed/bazar': typeof AuthedBazarRoute
+  '/_authed/charges': typeof AuthedChargesRoute
+  '/_authed/credits': typeof AuthedCreditsRoute
   '/_authed/dashboard': typeof AuthedDashboardRoute
   '/_authed/deposits': typeof AuthedDepositsRoute
+  '/_authed/ledger': typeof AuthedLedgerRoute
   '/_authed/meals': typeof AuthedMealsRoute
   '/_authed/members': typeof AuthedMembersRoute
+  '/_authed/monthly-closing': typeof AuthedMonthlyClosingRoute
+  '/_authed/payments': typeof AuthedPaymentsRoute
   '/_authed/reports': typeof AuthedReportsRoute
   '/_authed/rooms': typeof AuthedRoomsRoute
   '/_authed/staff': typeof AuthedStaffRoute
@@ -149,10 +194,15 @@ export interface FileRouteTypes {
     | '/signup'
     | '/admin'
     | '/bazar'
+    | '/charges'
+    | '/credits'
     | '/dashboard'
     | '/deposits'
+    | '/ledger'
     | '/meals'
     | '/members'
+    | '/monthly-closing'
+    | '/payments'
     | '/reports'
     | '/rooms'
     | '/staff'
@@ -164,10 +214,15 @@ export interface FileRouteTypes {
     | '/signup'
     | '/admin'
     | '/bazar'
+    | '/charges'
+    | '/credits'
     | '/dashboard'
     | '/deposits'
+    | '/ledger'
     | '/meals'
     | '/members'
+    | '/monthly-closing'
+    | '/payments'
     | '/reports'
     | '/rooms'
     | '/staff'
@@ -180,10 +235,15 @@ export interface FileRouteTypes {
     | '/signup'
     | '/_authed/admin'
     | '/_authed/bazar'
+    | '/_authed/charges'
+    | '/_authed/credits'
     | '/_authed/dashboard'
     | '/_authed/deposits'
+    | '/_authed/ledger'
     | '/_authed/meals'
     | '/_authed/members'
+    | '/_authed/monthly-closing'
+    | '/_authed/payments'
     | '/_authed/reports'
     | '/_authed/rooms'
     | '/_authed/staff'
@@ -255,6 +315,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedReportsRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/payments': {
+      id: '/_authed/payments'
+      path: '/payments'
+      fullPath: '/payments'
+      preLoaderRoute: typeof AuthedPaymentsRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/monthly-closing': {
+      id: '/_authed/monthly-closing'
+      path: '/monthly-closing'
+      fullPath: '/monthly-closing'
+      preLoaderRoute: typeof AuthedMonthlyClosingRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/members': {
       id: '/_authed/members'
       path: '/members'
@@ -269,6 +343,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedMealsRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/ledger': {
+      id: '/_authed/ledger'
+      path: '/ledger'
+      fullPath: '/ledger'
+      preLoaderRoute: typeof AuthedLedgerRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/deposits': {
       id: '/_authed/deposits'
       path: '/deposits'
@@ -281,6 +362,20 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof AuthedDashboardRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/credits': {
+      id: '/_authed/credits'
+      path: '/credits'
+      fullPath: '/credits'
+      preLoaderRoute: typeof AuthedCreditsRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/charges': {
+      id: '/_authed/charges'
+      path: '/charges'
+      fullPath: '/charges'
+      preLoaderRoute: typeof AuthedChargesRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/bazar': {
@@ -303,10 +398,15 @@ declare module '@tanstack/react-router' {
 interface AuthedRouteChildren {
   AuthedAdminRoute: typeof AuthedAdminRoute
   AuthedBazarRoute: typeof AuthedBazarRoute
+  AuthedChargesRoute: typeof AuthedChargesRoute
+  AuthedCreditsRoute: typeof AuthedCreditsRoute
   AuthedDashboardRoute: typeof AuthedDashboardRoute
   AuthedDepositsRoute: typeof AuthedDepositsRoute
+  AuthedLedgerRoute: typeof AuthedLedgerRoute
   AuthedMealsRoute: typeof AuthedMealsRoute
   AuthedMembersRoute: typeof AuthedMembersRoute
+  AuthedMonthlyClosingRoute: typeof AuthedMonthlyClosingRoute
+  AuthedPaymentsRoute: typeof AuthedPaymentsRoute
   AuthedReportsRoute: typeof AuthedReportsRoute
   AuthedRoomsRoute: typeof AuthedRoomsRoute
   AuthedStaffRoute: typeof AuthedStaffRoute
@@ -316,10 +416,15 @@ interface AuthedRouteChildren {
 const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedAdminRoute: AuthedAdminRoute,
   AuthedBazarRoute: AuthedBazarRoute,
+  AuthedChargesRoute: AuthedChargesRoute,
+  AuthedCreditsRoute: AuthedCreditsRoute,
   AuthedDashboardRoute: AuthedDashboardRoute,
   AuthedDepositsRoute: AuthedDepositsRoute,
+  AuthedLedgerRoute: AuthedLedgerRoute,
   AuthedMealsRoute: AuthedMealsRoute,
   AuthedMembersRoute: AuthedMembersRoute,
+  AuthedMonthlyClosingRoute: AuthedMonthlyClosingRoute,
+  AuthedPaymentsRoute: AuthedPaymentsRoute,
   AuthedReportsRoute: AuthedReportsRoute,
   AuthedRoomsRoute: AuthedRoomsRoute,
   AuthedStaffRoute: AuthedStaffRoute,

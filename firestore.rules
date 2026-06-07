@@ -54,76 +54,113 @@ service cloud.firestore {
 
     match /members/{memberId} {
       allow read: if isSignedIn();
-      allow create: if isOwnerOrManager() && hasValidCreateFields() || (isUser() && request.resource.data.uid == request.auth.uid && hasValidCreateFields());
+      allow create: if isOwnerOrManager() || (isUser() && request.resource.data.uid == request.auth.uid);
       allow update: if isOwnerOrManager() || (isUser() && resource.data.uid == request.auth.uid);
       allow delete: if isOwnerOrManager();
     }
 
     match /rooms/{roomId} {
       allow read: if isSignedIn();
-      allow create: if isOwnerOrManager() && hasValidCreateFields() || isUser() && hasValidCreateFields();
-      allow update, delete: if isOwner() || (isOwnerOrManager() && isDocumentOwner()) || (isUser() && isDocumentOwner());
+      allow create: if isOwnerOrManager() || isUser();
+      allow update, delete: if isOwner() || isOwnerOrManager() || isUser();
     }
 
     match /beds/{bedId} {
       allow read: if isSignedIn();
-      allow create: if isOwnerOrManager() && hasValidCreateFields() || isUser() && hasValidCreateFields();
-      allow update, delete: if isOwner() || (isOwnerOrManager() && isDocumentOwner()) || (isUser() && isDocumentOwner());
+      allow create: if isOwnerOrManager() || isUser();
+      allow update, delete: if isOwner() || isOwnerOrManager() || isUser();
     }
 
     match /staff/{staffId} {
       allow read: if isOwnerOrManager() || isStaff();
-      allow create: if isOwnerOrManager() && hasValidCreateFields();
+      allow create: if isOwnerOrManager();
       allow update: if isOwner() || (isManager() && isDocumentOwner()) || (isStaff() && isDocumentOwner());
       allow delete: if isOwner();
     }
 
+    match /services/{serviceId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager();
+      allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
+    }
+
     match /meals/{mealId} {
       allow read: if isSignedIn();
-      allow create: if isOwnerOrManager() && hasValidCreateFields() || isUser() && hasValidCreateFields();
-      allow update, delete: if isOwner() || (isOwnerOrManager() && isDocumentOwner()) || (isUser() && isDocumentOwner());
+      allow create: if isOwnerOrManager() || isUser();
+      allow update, delete: if isOwner() || isOwnerOrManager() || isUser();
+    }
+
+    match /meal_entries/{entryId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager() || isUser();
+      allow update, delete: if isOwner() || isOwnerOrManager() || isUser();
     }
 
     match /bazar/{bazarId} {
       allow read: if isSignedIn();
-      allow create: if isOwnerOrManager() && hasValidCreateFields() || isUser() && hasValidCreateFields();
-      allow update, delete: if isOwner() || (isOwnerOrManager() && isDocumentOwner()) || (isUser() && isDocumentOwner());
+      allow create: if isOwnerOrManager() || isUser();
+      allow update, delete: if isOwner() || isOwnerOrManager() || isUser();
     }
 
     match /utilities/{utilityId} {
       allow read: if isSignedIn();
-      allow create: if isOwnerOrManager() && hasValidCreateFields() || isUser() && hasValidCreateFields();
-      allow update, delete: if isOwner() || (isOwnerOrManager() && isDocumentOwner()) || (isUser() && isDocumentOwner());
+      allow create: if isOwnerOrManager();
+      allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
+    }
+
+    match /utility_allocations/{allocationId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager();
+      allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
+    }
+
+    match /staff_allocations/{allocationId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager();
+      allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
+    }
+
+    match /rent_charges/{chargeId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager();
+      allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
     }
 
     match /deposits/{depositId} {
-      allow read: if isOwnerOrManager() || isUser();
-      allow create: if isOwnerOrManager() && hasValidCreateFields() || isUser() && hasValidCreateFields();
-      allow update, delete: if isOwner() || (isOwnerOrManager() && isDocumentOwner()) || (isUser() && isDocumentOwner());
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager() || isUser();
+      allow update, delete: if isOwner() || isOwnerOrManager() || isUser();
     }
 
     match /credits/{creditId} {
-      allow read: if isOwnerOrManager() || isUser();
-      allow create: if isOwnerOrManager() && hasValidCreateFields() || isUser() && hasValidCreateFields();
-      allow update, delete: if isOwner() || (isOwnerOrManager() && isDocumentOwner()) || (isUser() && isDocumentOwner());
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager() || isUser();
+      allow update, delete: if isOwner() || isOwnerOrManager() || isUser();
     }
 
-    match /rent_ledgers/{ledgerId} {
-      allow read: if isOwnerOrManager() || (isUser() && resource.data.uid == request.auth.uid);
-      allow create: if isOwnerOrManager() && hasValidCreateFields();
-      allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
+    match /payments/{paymentId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager() || isUser();
+      allow update, delete: if isOwner() || isOwnerOrManager() || isUser();
+    }
+
+    match /ledgers/{ledgerId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isOwner();
+      allow delete: if isOwner();
     }
 
     match /reports/{reportId} {
       allow read: if isSignedIn();
-      allow create: if isOwnerOrManager() && hasValidCreateFields() || isUser() && hasValidCreateFields();
-      allow update, delete: if isOwner() || (isOwnerOrManager() && isDocumentOwner()) || (isUser() && isDocumentOwner());
+      allow create: if isOwnerOrManager();
+      allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
     }
 
     match /notifications/{notificationId} {
       allow read: if isSignedIn();
-      allow create: if isOwnerOrManager() && hasValidCreateFields() || isUser() && hasValidCreateFields();
-      allow update, delete: if isOwner() || (isOwnerOrManager() && isDocumentOwner()) || (isUser() && isDocumentOwner());
+      allow create: if isOwnerOrManager();
+      allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
     }
 
     match /settings/{settingId} {
@@ -133,18 +170,26 @@ service cloud.firestore {
 
     match /monthly_closing/{closingId} {
       allow read: if isSignedIn();
-      allow create: if isOwnerOrManager() && hasValidCreateFields();
+      allow create: if isOwnerOrManager();
       allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
     }
 
     match /activity_logs/{logId} {
-      allow read: if isOwnerOrManager();
-      allow create: if isSignedIn() && hasValidCreateFields();
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
       allow update, delete: if isOwner();
     }
 
-    match /{document=**} {
-      allow read, write: if false;
+    match /change_requests/{requestId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isOwner() || (isManager() && resource.data.requestedByUid != request.auth.uid);
+      allow delete: if isOwner();
+    }
+
+    match /meta/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isOwner();
     }
   }
 }

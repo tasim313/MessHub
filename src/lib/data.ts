@@ -15,6 +15,7 @@ import {
   type QueryConstraint,
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
+import type { ServiceSubscription } from "@/lib/types";
 
 export function withoutUndefined<T extends Record<string, unknown>>(
   data: T,
@@ -59,6 +60,7 @@ export interface Member {
   status?: "active" | "inactive" | "moved_out" | "suspended" | "pending";
   joinedAt?: number;
   createdBy?: string;
+  services?: ServiceSubscription[];
 }
 
 export interface MealEntry {
@@ -107,6 +109,7 @@ export interface Deposit {
   method: string; // cash, bkash, nagad, rocket, bank
   date: string;
   ym: string;
+  referenceNo?: string;
   notes?: string;
   createdAt?: number;
 }
@@ -258,3 +261,5 @@ export async function findMemberByUid(uid: string) {
 }
 
 export { where, orderBy };
+
+export type { Bed, Credit, Payment, LedgerEntry, Report, Notification, MonthlyClosing, Settings } from "@/lib/types";
