@@ -86,6 +86,7 @@ async function loadOrCreateProfile(
       active: true,
       photoURL: u.photoURL,
       createdAt: Date.now(),
+      createdBy: u.uid,
     };
     await setDoc(
       ref,
@@ -95,6 +96,7 @@ async function loadOrCreateProfile(
       await setDoc(doc(db, "meta", "owner"), {
         uid: u.uid,
         at: serverTimestamp(),
+        createdBy: u.uid,
       });
     }
   }
@@ -111,6 +113,7 @@ async function loadOrCreateProfile(
       profile.status !== "suspended" &&
       profile.active !== false,
     joinedAt: profile.createdAt || Date.now(),
+    createdBy: u.uid,
   };
 
   if (existingMember) {

@@ -6,19 +6,27 @@ service cloud.firestore {
     }
 
     function isOwner() {
-      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "owner";
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "owner";
     }
 
     function isManager() {
-      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "manager";
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "manager";
     }
 
     function isUser() {
-      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["user", "member"];
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["user", "member"];
     }
 
     function isStaff() {
-      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "staff";
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "staff";
     }
 
     function isOwnerOrManager() {
@@ -34,8 +42,7 @@ service cloud.firestore {
     }
 
     function hasValidCreateFields() {
-      return request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.createdAt is timestamp;
+      return request.resource.data.createdBy == request.auth.uid;
     }
 
     match /users/{userId} {

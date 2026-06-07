@@ -14,7 +14,7 @@ import {
   where,
   type QueryConstraint,
 } from "firebase/firestore";
-import { db } from "./firebase";
+import { auth, db } from "./firebase";
 
 export function withoutUndefined<T extends Record<string, unknown>>(
   data: T,
@@ -58,6 +58,7 @@ export interface Member {
   notes?: string;
   status?: "active" | "inactive" | "moved_out" | "suspended" | "pending";
   joinedAt?: number;
+  createdBy?: string;
 }
 
 export interface MealEntry {
@@ -207,11 +208,13 @@ export function useCollection<T>(
 export async function addDocTo<T extends Record<string, unknown>>(
   path: string,
   data: T,
+  uid?: string,
 ) {
   return addDoc(
     collection(db, path),
     withoutUndefined({
       ...data,
+      createdBy: uid || auth.currentUser?.uid,
       createdAt: Date.now(),
       createdAtServer: serverTimestamp(),
     }),
@@ -234,8 +237,16 @@ export async function setDocIn<T extends Record<string, unknown>>(
   path: string,
   id: string,
   data: T,
+  uid?: string,
 ) {
-  return setDoc(doc(db, path, id), withoutUndefined(data), { merge: true });
+  return setDoc(
+    doc(db, path, id),
+    withoutUndefined({
+      ...data,
+      createdBy: uid || auth.currentUser?.uid,
+    }),
+    { merge: true },
+  );
 }
 
 export async function findMemberByUid(uid: string) {

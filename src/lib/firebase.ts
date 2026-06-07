@@ -50,4 +50,5 @@ export interface AppUser {
   phone?: string;
   photoURL?: string | null;
   createdAt?: number;
+  createdBy?: string;
 }
