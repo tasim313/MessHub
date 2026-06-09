@@ -1,73 +1,14 @@
-import type { Member, RentCharge, Payment, Deposit, Credit, LedgerEntry } from "@/lib/types";
+import type { RentCharge, Payment } from "@/lib/types";
 
-export function calculateRentCharges(
-  members: Member[],
-  month: string,
-): RentCharge[] {
-  return members
-    .filter((m) => m.active && typeof m.monthlyRent === "number" && m.monthlyRent > 0)
-    .map((m) => ({
-      id: `${m.id}_${month}`,
-      memberId: m.id,
-      memberName: m.name,
-      month,
-      amount: m.monthlyRent as number,
-      status: "pending" as const,
-      paidAmount: 0,
-      dueAmount: m.monthlyRent as number,
-      createdAt: Date.now(),
-      createdBy: m.uid || "",
-    }));
-}
+/**
+ * Rent Calculation Module
+ * Re-exports from centralized calculation engine to ensure consistent calculations.
+ */
+export { calculateRentCharges, calculateMemberDue } from "./engine";
 
-export function calculateMemberDue(
-  memberId: string,
-  rentCharges: RentCharge[],
-  payments: Payment[],
-  deposits: Deposit[],
-  credits: Credit[],
-): {
-  totalRent: number;
-  totalPaid: number;
-  totalDue: number;
-  paymentStatus: "paid" | "partially_paid" | "due" | "overpaid";
-} {
-  const memberRent = rentCharges
-    .filter((r) => r.memberId === memberId)
-    .reduce((sum, r) => sum + r.amount, 0);
-
-  const memberPayments = payments
-    .filter((p) => p.memberId === memberId)
-    .reduce((sum, p) => sum + p.amount, 0);
-
-  const memberDeposits = deposits
-    .filter((d) => d.memberId === memberId)
-    .reduce((sum, d) => sum + d.amount, 0);
-
-  const memberCredits = credits
-    .filter((c) => c.memberId === memberId)
-    .reduce((sum, c) => sum + c.amount, 0);
-
-  const totalPaid = memberPayments + memberDeposits + memberCredits;
-  const totalDue = memberRent - totalPaid;
-
-  let paymentStatus: "paid" | "partially_paid" | "due" | "overpaid";
-  if (totalDue <= 0) {
-    paymentStatus = totalDue < 0 ? "overpaid" : "paid";
-  } else if (totalPaid > 0) {
-    paymentStatus = "partially_paid";
-  } else {
-    paymentStatus = "due";
-  }
-
-  return {
-    totalRent: memberRent,
-    totalPaid,
-    totalDue,
-    paymentStatus,
-  };
-}
-
+/**
+ * Get rent collection statistics
+ */
 export function getRentCollectionStats(
   rentCharges: RentCharge[],
   payments: Payment[],

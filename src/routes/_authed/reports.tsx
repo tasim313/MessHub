@@ -59,6 +59,8 @@ function ReportsPage() {
         bazar,
         utilities,
         deposits,
+        [],
+        [],
         staff,
         rooms,
       ),

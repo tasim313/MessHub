@@ -1,14 +1,11 @@
+/**
+ * Meal Calculation Module
+ * 
+ * NOTE: This module now re-exports from the centralized engine.ts
+ * to ensure all calculations use the same logic.
+ */
 import type { MealEntry, Bazar, Member } from "@/lib/types";
-
-export function calculateMealRate(bazarEntries: Bazar[], mealEntries: MealEntry[]): number {
-  const totalBazar = bazarEntries.reduce((sum, b) => sum + b.total, 0);
-  const totalMeals = mealEntries.reduce(
-    (sum, m) => sum + m.breakfast + m.lunch + m.dinner + m.guest,
-    0,
-  );
-  if (totalMeals === 0) return 0;
-  return totalBazar / totalMeals;
-}
+import { calculateMealRate } from "./engine";
 
 export function calculateMemberMealCost(
   memberMeals: MealEntry,

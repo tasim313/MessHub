@@ -11,11 +11,12 @@ import { useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { useCollection, addDocTo, updateDocIn, deleteDocFrom, orderBy, type Member } from "@/lib/data";
 import { dayKey, bdt } from "@/lib/format";
-import { Plus, Trash2, Banknote, Pencil } from "lucide-react";
+import { Plus, Trash2, Banknote, Pencil, Receipt } from "lucide-react";
 import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
 import { checkPaymentReferenceExists } from "@/lib/duplicate-check";
 import type { Payment } from "@/lib/types";
+import { EXPENSE_CATEGORY_LABELS } from "@/lib/types";
 
 export const Route = createFileRoute("/_authed/payments")({
   component: PaymentsPage,
@@ -30,11 +31,11 @@ function PaymentsPage() {
   const { data: payments } = useCollection<Payment>("payments", [orderBy("date", "desc")]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Payment | null>(null);
-  const [form, setForm] = useState({ memberId: "", amount: "", method: "Cash", date: dayKey(), status: "paid" as Payment["status"], referenceNo: "", notes: "" });
+  const [form, setForm] = useState({ memberId: "", amount: "", method: "Cash", date: dayKey(), status: "paid" as Payment["status"], referenceNo: "", notes: "", category: "" });
 
   const resetForm = () => {
     setEditing(null);
-    setForm({ memberId: "", amount: "", method: "Cash", date: dayKey(), status: "paid", referenceNo: "", notes: "" });
+    setForm({ memberId: "", amount: "", method: "Cash", date: dayKey(), status: "paid", referenceNo: "", notes: "", category: "" });
   };
 
   const activeMembers = useMemo(
@@ -65,6 +66,7 @@ function PaymentsPage() {
         status: form.status,
         referenceNo: form.referenceNo,
         notes: form.notes,
+        category: form.category || undefined,
       };
       if (profile?.role === "owner" && editing) {
         await updateDocIn("payments", editing.id, payload);
@@ -78,9 +80,9 @@ function PaymentsPage() {
           date: form.date,
           ym: form.date.slice(0, 7),
           transactionType: "payment",
-          category: "payment",
+          category: form.category || "payment",
           amount,
-          notes: form.notes || `Payment via ${form.method}`,
+          notes: form.notes || `Payment via ${form.method}${form.category ? ` for ${EXPENSE_CATEGORY_LABELS[form.category as keyof typeof EXPENSE_CATEGORY_LABELS] || form.category}` : ""}`,
         });
         toast.success("Payment recorded");
       } else if (profile) {
@@ -150,8 +152,25 @@ function PaymentsPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-2"><Label>Date</Label><Input type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})}/></div>
-                  <div className="space-y-2"><Label>Reference</Label><Input value={form.referenceNo} onChange={(e) => setForm({...form, referenceNo: e.target.value})} placeholder="TrxID or ref #"/></div>
+                  <div className="space-y-2">
+                    <Label>Category (What it's for)</Label>
+                    <Select value={form.category} onValueChange={(v) => setForm({...form, category: v})}>
+                      <SelectTrigger><SelectValue placeholder="Select category"/></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="rent">Rent</SelectItem>
+                        <SelectItem value="meal">Meals</SelectItem>
+                        <SelectItem value="internet">Internet</SelectItem>
+                        <SelectItem value="electricity">Electricity</SelectItem>
+                        <SelectItem value="gas">Gas</SelectItem>
+                        <SelectItem value="water">Water</SelectItem>
+                        <SelectItem value="staff">Staff</SelectItem>
+                        <SelectItem value="maintenance">Maintenance</SelectItem>
+                        <SelectItem value="other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
+                <div className="space-y-2"><Label>Reference</Label><Input value={form.referenceNo} onChange={(e) => setForm({...form, referenceNo: e.target.value})} placeholder="TrxID or ref #"/></div>
                 <div className="space-y-2"><Label>Notes</Label><Textarea rows={2} value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})}/></div>
                 <DialogFooter><Button type="submit">Save</Button></DialogFooter>
               </form>
@@ -173,6 +192,7 @@ function PaymentsPage() {
                   <tr>
                     <th className="text-left p-3 font-medium">Date</th>
                     <th className="text-left p-3 font-medium">Member</th>
+                    <th className="text-left p-3 font-medium">Category</th>
                     <th className="text-left p-3 font-medium">Method</th>
                     <th className="text-left p-3 font-medium">Ref</th>
                     <th className="text-left p-3 font-medium">Status</th>
@@ -185,6 +205,16 @@ function PaymentsPage() {
                     <tr key={d.id} className="border-t hover:bg-muted/30">
                       <td className="p-3">{d.date}</td>
                       <td className="p-3 font-medium">{d.memberName}</td>
+                      <td className="p-3">
+                        {d.category ? (
+                          <span className="inline-flex items-center gap-1">
+                            <Receipt className="h-3 w-3 text-muted-foreground" />
+                            {EXPENSE_CATEGORY_LABELS[d.category as keyof typeof EXPENSE_CATEGORY_LABELS] || d.category}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
                       <td className="p-3">{d.method}</td>
                       <td className="p-3 text-muted-foreground">{d.referenceNo || "—"}</td>
                       <td className="p-3">
@@ -201,7 +231,7 @@ function PaymentsPage() {
                       {profile && (
                         <td className="p-3">
                           <div className="flex justify-end gap-2">
-                            <Button size="sm" variant="outline" onClick={() => { setEditing(d); setForm({ memberId: d.memberId, amount: String(d.amount), method: d.method, date: d.date, status: d.status, referenceNo: d.referenceNo || "", notes: d.notes || "" }); setOpen(true); }}>
+                            <Button size="sm" variant="outline" onClick={() => { setEditing(d); setForm({ memberId: d.memberId, amount: String(d.amount), method: d.method as string, date: d.date, status: d.status, referenceNo: d.referenceNo || "", notes: d.notes || "", category: d.category || "" }); setOpen(true); }}>
                               <Pencil className="mr-1 h-3.5 w-3.5" />Edit
                             </Button>
                             <Button size="sm" variant="destructive" onClick={async () => {

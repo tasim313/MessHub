@@ -11,12 +11,15 @@ import {
   type Bazar,
   type Utility,
   type Deposit,
+  type Credit,
+  type Payment,
   type Staff,
   type Room,
 } from "@/lib/data";
 import { computeMonthly } from "@/lib/calc";
 import { ymKey, bdt } from "@/lib/format";
 import { useMemo } from "react";
+import type { MonthlyClosing } from "@/lib/types";
 import { useAuth } from "@/lib/auth-context";
 import {
   Utensils,
@@ -34,6 +37,7 @@ import {
   Receipt,
   Building2,
   Activity,
+  ArrowDownRight,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -68,8 +72,11 @@ function DashboardPage() {
   const { data: bazar } = useCollection<Bazar>("bazar", [orderBy("createdAt", "desc")]);
   const { data: utilities } = useCollection<Utility>("utilities");
   const { data: deposits } = useCollection<Deposit>("deposits");
+  const { data: credits } = useCollection<Credit>("credits");
+  const { data: payments } = useCollection<Payment>("payments");
   const { data: staff } = useCollection<Staff>("staff");
   const { data: rooms } = useCollection<Room>("rooms");
+  const { data: closings } = useCollection<MonthlyClosing>("monthly_closing", [orderBy("createdAt", "desc")]);
 
   const currentMember = useMemo(
     () =>
@@ -81,9 +88,28 @@ function DashboardPage() {
     [members, profile],
   );
 
+  // Build prevClosings for carry forward
+  const prevClosings = useMemo(() => {
+    if (!closings.length) return [];
+    const [year, month] = ym.split("-").map(Number);
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const prevYear = month === 1 ? year - 1 : year;
+    const prevYm = `${prevYear}-${String(prevMonth).padStart(2, "0")}`;
+    const prevClosing = closings.find((c) => c.month === prevYm);
+    if (!prevClosing || prevClosing.status !== "closed") return [];
+    
+    const breakdown = (prevClosing as any).memberBreakdown || {};
+    return Object.entries(breakdown).map(([memberId, data]: [string, any]) => ({
+      month: prevYm,
+      memberId,
+      deposit: data.deposit || 0,
+      credit: data.credit || 0,
+    }));
+  }, [closings, ym]);
+
   const summary = useMemo(
-    () => computeMonthly(ym, members, meals, bazar, utilities, deposits, staff, rooms),
-    [ym, members, meals, bazar, utilities, deposits, staff, rooms],
+    () => computeMonthly(ym, members, meals, bazar, utilities, deposits, credits, payments, staff, rooms, [], prevClosings),
+    [ym, members, meals, bazar, utilities, deposits, credits, payments, staff, rooms, prevClosings],
   );
 
   const balance = summary.totalDeposits - summary.totalExpense;
@@ -221,6 +247,40 @@ function DashboardPage() {
             <StatCard label="Total Due" value={bdt(summary.perMember.reduce((s, m) => s + Math.max(0, -m.balance), 0))} icon={DollarSign} tone="danger" hint={`${dueMembers.length} members`} />
             <StatCard label="Total Deposits" value={bdt(summary.totalDeposits)} icon={PiggyBank} tone="primary" hint="Collected this month" />
             <StatCard label="Staff Cost" value={bdt(summary.totalStaffCost)} icon={Users} hint={`${staff.filter((s) => s.status !== "inactive").length} active`} />
+          </div>
+        )}
+
+        {/* KPI Row 2b - Deposit Liability & Credit Receivable */}
+        {isOwnerOrManager && (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard
+              label="Total Deposit Liability"
+              value={bdt(summary.settlementSummary.totalReceivable)}
+              icon={PiggyBank}
+              tone="primary"
+              hint="Money mess must return"
+            />
+            <StatCard
+              label="Total Credit Receivable"
+              value={bdt(summary.settlementSummary.totalPayable)}
+              icon={ArrowDownRight}
+              tone="danger"
+              hint="Money members must pay"
+            />
+            <StatCard
+              label="Members To Receive"
+              value={String(summary.settlementSummary.membersToReceive.length)}
+              icon={Users}
+              tone="primary"
+              hint="Mess owes them"
+            />
+            <StatCard
+              label="Members Who Owe"
+              value={String(summary.settlementSummary.membersToPay.length)}
+              icon={Users}
+              tone="danger"
+              hint="They owe mess"
+            />
           </div>
         )}
 

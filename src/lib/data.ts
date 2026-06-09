@@ -15,7 +15,50 @@ import {
   type QueryConstraint,
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import type { ServiceSubscription } from "@/lib/types";
+import type {
+  ServiceSubscription,
+  Member,
+  MealEntry,
+  Bazar,
+  Utility,
+  Deposit,
+  Room,
+  Staff,
+  ChangeRequest,
+  ActivityLog,
+  Bed,
+  Credit,
+  Payment,
+  LedgerEntry,
+  Report,
+  Notification,
+  MonthlyClosing,
+  Settings,
+  Expense,
+} from "./types";
+
+// Re-export all types for backward compatibility with existing imports
+export type {
+  ServiceSubscription,
+  Member,
+  MealEntry,
+  Bazar,
+  Utility,
+  Deposit,
+  Room,
+  Staff,
+  ChangeRequest,
+  ActivityLog,
+  Bed,
+  Credit,
+  Payment,
+  LedgerEntry,
+  Report,
+  Notification,
+  MonthlyClosing,
+  Settings,
+  Expense,
+};
 
 export function withoutUndefined<T extends Record<string, unknown>>(
   data: T,
@@ -25,160 +68,8 @@ export function withoutUndefined<T extends Record<string, unknown>>(
   ) as T;
 }
 
-export interface Member {
-  id: string;
-  name: string;
-  email?: string | null;
-  phone?: string;
-  role:
-    | "owner"
-    | "manager"
-    | "accountant"
-    | "bazar_manager"
-    | "meal_manager"
-    | "cook"
-    | "member"
-    | "guest"
-    | "auditor";
-  uid?: string;
-  active: boolean;
-  photoUrl?: string;
-  nid?: string;
-  occupation?: string;
-  emergencyContact?: string;
-  joiningDate?: string;
-  leavingDate?: string;
-  roomId?: string;
-  roomName?: string;
-  bedNo?: string;
-  depositAmount?: number;
-  monthlyRent?: number;
-  mealStatus?: "active" | "hold" | "cancelled";
-  securityDeposit?: number;
-  previousDue?: number;
-  notes?: string;
-  status?: "active" | "inactive" | "moved_out" | "suspended" | "pending";
-  joinedAt?: number;
-  createdBy?: string;
-  services?: ServiceSubscription[];
-}
-
-export interface MealEntry {
-  id: string;
-  memberId: string;
-  memberName: string;
-  date: string; // YYYY-MM-DD
-  ym: string; // YYYY-MM
-  breakfast: number;
-  lunch: number;
-  dinner: number;
-  guest: number;
-  createdAt?: number;
-}
-
-export interface Bazar {
-  id: string;
-  date: string;
-  ym: string;
-  buyerId: string;
-  buyerName: string;
-  items: { name: string; amount: number }[];
-  total: number;
-  category: string;
-  notes?: string;
-  createdAt?: number;
-}
-
-export interface Utility {
-  id: string;
-  ym: string;
-  type: string; // electricity, gas, water, internet, bua, rent, etc.
-  amount: number;
-  paidBy?: string;
-  paidByName?: string;
-  notes?: string;
-  date: string;
-  createdAt?: number;
-}
-
-export interface Deposit {
-  id: string;
-  memberId: string;
-  memberName: string;
-  amount: number;
-  method: string; // cash, bkash, nagad, rocket, bank
-  date: string;
-  ym: string;
-  referenceNo?: string;
-  notes?: string;
-  createdAt?: number;
-}
-
-export interface Room {
-  id: string;
-  messName: string;
-  branchName?: string;
-  buildingName: string;
-  floorName: string;
-  roomNo: string;
-  roomType: "single" | "double" | "triple" | "shared" | "family" | "staff";
-  totalBeds: number;
-  monthlyRent: number;
-  status: "available" | "occupied" | "maintenance" | "reserved";
-  notes?: string;
-  createdAt?: number;
-}
-
-export interface Staff {
-  id: string;
-  name: string;
-  phone?: string;
-  role: "manager" | "cook" | "cleaner" | "security" | "helper" | "accountant";
-  salary: number;
-  advance?: number;
-  overtime?: number;
-  bonus?: number;
-  leaveDays?: number;
-  attendanceDays?: number;
-  paidAmount?: number;
-  status: "active" | "inactive" | "on_leave";
-  joinedAt?: string;
-  notes?: string;
-  createdAt?: number;
-}
-
-export interface ChangeRequest {
-  id: string;
-  collectionName: string;
-  action: "create" | "update" | "delete";
-  targetId?: string;
-  title: string;
-  payload?: Record<string, unknown>;
-  previousData?: Record<string, unknown> | null;
-  requestedByUid: string;
-  requestedByName: string;
-  requestedByRole: Member["role"];
-  status: "pending" | "approved" | "rejected";
-  reviewNote?: string;
-  reviewedByUid?: string;
-  reviewedByName?: string;
-  createdAt?: number;
-  updatedAt?: number;
-}
-
-export interface ActivityLog {
-  id: string;
-  type: string;
-  entity: string;
-  entityId?: string;
-  action: string;
-  actorUid: string;
-  actorName: string;
-  actorRole: Member["role"];
-  message: string;
-  meta?: Record<string, unknown>;
-  createdAt?: number;
-}
+// NOTE: All type definitions (Member, MealEntry, Bazar, Utility, Deposit, Room, Staff, etc.)
+// are now imported from src/lib/types.ts to ensure a single source of truth.
 
 export function useCollection<T>(
   path: string,
@@ -261,5 +152,3 @@ export async function findMemberByUid(uid: string) {
 }
 
 export { where, orderBy };
-
-export type { Bed, Credit, Payment, LedgerEntry, Report, Notification, MonthlyClosing, Settings } from "@/lib/types";

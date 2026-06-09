@@ -187,3 +187,19 @@ export function generateUtilityAllocationId(utilityId: string, memberId: string)
 export function generateStaffAllocationId(staffId: string, memberId: string, month: string): string {
   return `${staffId}_${memberId}_${month}`;
 }
+
+/**
+ * Check if a ledger charge entry already exists for a member in a given month and category
+ * Returns true if duplicate exists
+ */
+export async function checkLedgerChargeExists(memberId: string, month: string, category: string): Promise<boolean> {
+  const q = query(
+    collection(db, "ledgers"),
+    where("memberId", "==", memberId),
+    where("ym", "==", month),
+    where("transactionType", "==", "charge"),
+    where("category", "==", category)
+  );
+  const snap = await getDocs(q);
+  return !snap.empty;
+}

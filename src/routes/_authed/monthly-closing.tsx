@@ -21,13 +21,14 @@ import {
   type Member,
   type MealEntry,
   type Bazar,
-  type Utility,
   type Staff,
   type Room,
 } from "@/lib/data";
+import type { Expense } from "@/lib/types";
 import { computeMonthly } from "@/lib/calc";
 import { ymKey, bdt } from "@/lib/format";
 import { calculateMonthlyClosing } from "@/lib/calculations/monthly-closing";
+import { calculateAllSettlements } from "@/lib/calculations/engine";
 import { generateRentChargesForMonth } from "@/lib/transaction";
 import {
   Lock,
@@ -48,7 +49,7 @@ function MonthlyClosingPage() {
   const { data: members } = useCollection<Member>("members");
   const { data: meals } = useCollection<MealEntry>("meals");
   const { data: bazar } = useCollection<Bazar>("bazar");
-  const { data: utilities } = useCollection<Utility>("utilities");
+  const { data: expenses } = useCollection<Expense>("expenses");
   const { data: deposits } = useCollection<Deposit>("deposits");
   const { data: credits } = useCollection<Credit>("credits");
   const { data: payments } = useCollection<Payment>("payments");
@@ -60,13 +61,13 @@ function MonthlyClosingPage() {
   const { data: rentCharges } = useCollection<RentCharge>("rent_charges");
 
   const monthBazar = useMemo(() => bazar.filter((b) => b.ym === ym), [bazar, ym]);
-  const monthUtilities = useMemo(() => utilities.filter((u) => u.ym === ym), [utilities, ym]);
+  const monthExpenses = useMemo(() => expenses.filter((e) => e.ym === ym), [expenses, ym]);
   const activeStaff = useMemo(() => staff.filter((s) => s.status !== "inactive"), [staff]);
 
   const monthSummary = useMemo(
     () =>
-      computeMonthly(ym, members, meals, bazar, utilities, deposits, staff, rooms),
-    [ym, members, meals, bazar, utilities, deposits, staff, rooms],
+      computeMonthly(ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms),
+    [ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms],
   );
 
   const existingClosing = useMemo(
@@ -79,6 +80,8 @@ function MonthlyClosingPage() {
     [rentCharges, ym],
   );
 
+  const monthMeals = useMemo(() => meals.filter((m) => m.ym === ym), [meals, ym]);
+
   const closingData = useMemo(() => {
     const year = parseInt(ym.split("-")[0], 10);
     return calculateMonthlyClosing(
@@ -90,10 +93,11 @@ function MonthlyClosingPage() {
       credits.filter((c) => c.ym === ym),
       payments.filter((p) => p.ym === ym),
       monthBazar,
-      monthUtilities,
+      monthExpenses,
       activeStaff,
+      monthMeals, // Fixed: pass meals to calculate meal rate correctly
     );
-  }, [ym, members, monthRentCharges, deposits, credits, payments, monthBazar, monthUtilities, activeStaff]);
+  }, [ym, members, monthRentCharges, deposits, credits, payments, monthBazar, monthExpenses, activeStaff, monthMeals]);
 
   const [open, setOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -111,25 +115,54 @@ function MonthlyClosingPage() {
     }
   };
 
+  // Build member breakdown for carry forward
+  const memberBreakdown = useMemo(() => {
+    const breakdown: Record<string, { deposit: number; credit: number; balance: number; totalCharges: number; totalContributions: number }> = {};
+    monthSummary.perMember.forEach((p) => {
+      breakdown[p.memberId] = {
+        deposit: p.deposited,
+        credit: p.credited,
+        balance: p.balance,
+        totalCharges: p.totalCharges,
+        totalContributions: p.totalContributions,
+      };
+    });
+    return breakdown;
+  }, [monthSummary]);
+
   const handleClose = async () => {
     if (!profile) return;
     try {
+      const closePayload = {
+        month: ym,
+        year: parseInt(ym.split("-")[0], 10),
+        totalIncome: monthSummary.perMember.reduce((s, p) => s + p.rentShare, 0) + monthSummary.totalPayments,
+        totalExpense: monthSummary.totalExpense,
+        netProfit: (monthSummary.totalDeposits + monthSummary.totalPayments) - monthSummary.totalExpense,
+        totalRent: monthSummary.totalRent,
+        totalMeal: monthSummary.totalBazar,
+        totalUtility: monthSummary.totalUtilities,
+        totalStaff: monthSummary.totalStaffCost,
+        totalDeposit: monthSummary.totalDeposits,
+        totalCredit: monthSummary.totalCredits,
+        totalCollection: monthSummary.totalPayments,
+        totalDue: monthSummary.perMember.reduce((s, p) => s + Math.max(0, -p.balance), 0),
+        mealRate: monthSummary.mealRate,
+        totalMeals: monthSummary.totalMeals,
+        totalBazar: monthSummary.totalBazar,
+        memberBreakdown,
+        closedBy: profile.uid,
+        closedByName: profile.name,
+        status: "closed" as const,
+        closedAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
       if (existingClosing) {
-        await updateDocIn("monthly_closing", existingClosing.id, {
-          ...closingData,
-          closedBy: profile.uid,
-          closedByName: profile.name,
-          status: "closed",
-          updatedAt: Date.now(),
-        });
-        toast.success("Monthly closing updated");
+        await updateDocIn("monthly_closing", existingClosing.id, closePayload);
+        toast.success("Monthly closed/updated");
       } else {
-        await addDocTo("monthly_closing", {
-          ...closingData,
-          closedBy: profile.uid,
-          closedByName: profile.name,
-          status: "closed",
-        });
+        await addDocTo("monthly_closing", closePayload);
         toast.success("Month closed successfully");
       }
       setOpen(false);
@@ -157,6 +190,15 @@ function MonthlyClosingPage() {
 
   // Check if rent charges exist for this month
   const hasRentCharges = monthRentCharges.length > 0;
+
+  // Expenses breakdown by category for the month
+  const expenseByCategory = useMemo(() => {
+    const byCat: Record<string, number> = {};
+    monthExpenses.forEach((e) => {
+      byCat[e.category] = (byCat[e.category] || 0) + (e.amount || 0);
+    });
+    return Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+  }, [monthExpenses]);
 
   return (
     <div>
@@ -221,7 +263,7 @@ function MonthlyClosingPage() {
                           <span className="font-semibold">{bdt(closingData.totalMeal)}</span>
                         </div>
                         <div className="flex justify-between text-sm">
-                          <span>Utilities</span>
+                          <span>Expenses</span>
                           <span className="font-semibold">{bdt(closingData.totalUtility)}</span>
                         </div>
                         <div className="flex justify-between text-sm">
@@ -264,7 +306,7 @@ function MonthlyClosingPage() {
           </Card>
         )}
 
-        {/* KPI Cards using actual data */}
+        {/* KPI Cards */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Card className="p-5">
             <div className="text-xs uppercase text-muted-foreground">Rent Receivable</div>
@@ -282,17 +324,17 @@ function MonthlyClosingPage() {
             <div className="text-xs text-muted-foreground mt-1">{monthBazar.length} entries</div>
           </Card>
           <Card className="p-5">
-            <div className="text-xs uppercase text-muted-foreground">Staff Salaries</div>
-            <div className="text-2xl font-bold text-destructive mt-2">{bdt(closingData.totalStaff)}</div>
-            <div className="text-xs text-muted-foreground mt-1">{activeStaff.length} active staff</div>
+            <div className="text-xs uppercase text-muted-foreground">Shared Expenses</div>
+            <div className="text-2xl font-bold text-destructive mt-2">{bdt(closingData.totalUtility)}</div>
+            <div className="text-xs text-muted-foreground mt-1">{monthExpenses.length} entries</div>
           </Card>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Card className="p-5">
-            <div className="text-xs uppercase text-muted-foreground">Utilities</div>
-            <div className="text-2xl font-bold text-destructive mt-2">{bdt(closingData.totalUtility)}</div>
-            <div className="text-xs text-muted-foreground mt-1">{monthUtilities.length} bills</div>
+            <div className="text-xs uppercase text-muted-foreground">Staff Salaries</div>
+            <div className="text-2xl font-bold text-destructive mt-2">{bdt(closingData.totalStaff)}</div>
+            <div className="text-xs text-muted-foreground mt-1">{activeStaff.length} active staff</div>
           </Card>
           <Card className="p-5">
             <div className="text-xs uppercase text-muted-foreground">Deposits</div>
@@ -308,6 +350,7 @@ function MonthlyClosingPage() {
           </Card>
         </div>
 
+        {/* Financial Breakdown */}
         <Card className="p-5">
           <h3 className="font-semibold mb-4">Financial Breakdown — {ym}</h3>
           <div className="grid gap-4 md:grid-cols-3">
@@ -336,7 +379,7 @@ function MonthlyClosingPage() {
                   <span className="font-semibold">{bdt(closingData.totalMeal)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span>Utilities</span>
+                  <span>Shared Expenses</span>
                   <span className="font-semibold">{bdt(closingData.totalUtility)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
@@ -375,8 +418,40 @@ function MonthlyClosingPage() {
           </div>
         </Card>
 
+        {/* Expense Breakdown by Category */}
+        {expenseByCategory.length > 0 && (
+          <Card className="p-5">
+            <h3 className="font-semibold mb-4">Expenses by Category</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-xs uppercase text-muted-foreground bg-muted/50">
+                  <tr>
+                    <th className="text-left p-3 font-medium">Category</th>
+                    <th className="text-right p-3 font-medium">Amount</th>
+                    <th className="text-right p-3 font-medium">% of Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {expenseByCategory.map(([cat, amount]) => (
+                    <tr key={cat} className="border-t hover:bg-muted/30">
+                      <td className="p-3 font-medium capitalize">{cat.replace(/_/g, " ")}</td>
+                      <td className="p-3 text-right tabular-nums font-semibold">{bdt(amount)}</td>
+                      <td className="p-3 text-right tabular-nums">
+                        {closingData.totalUtility > 0
+                          ? `${((amount / closingData.totalUtility) * 100).toFixed(1)}%`
+                          : "0%"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+
+        {/* Member Breakdown */}
         <Card className="p-5">
-          <h3 className="font-semibold mb-4">Member Breakdown</h3>
+          <h3 className="font-semibold mb-4">Member Breakdown — {ym}</h3>
           {monthSummary.perMember.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-6">No data for this month</p>
           ) : (
@@ -388,11 +463,18 @@ function MonthlyClosingPage() {
                     <th className="text-right p-3 font-medium">Meals</th>
                     <th className="text-right p-3 font-medium">Meal Cost</th>
                     <th className="text-right p-3 font-medium">Rent</th>
-                    <th className="text-right p-3 font-medium">Utility</th>
+                    <th className="text-right p-3 font-medium">Expenses</th>
                     <th className="text-right p-3 font-medium">Staff</th>
-                    <th className="text-right p-3 font-medium">Total Due</th>
-                    <th className="text-right p-3 font-medium">Deposited</th>
+                    <th className="text-right p-3 font-medium">Other Charges</th>
+                    <th className="text-right p-3 font-medium">Total Charges</th>
+                    <th className="text-right p-3 font-medium">Contributions</th>
+                    <th className="text-right p-3 font-medium">Prev Deposit</th>
+                    <th className="text-right p-3 font-medium">Prev Credit</th>
+                    <th className="text-right p-3 font-medium">Deposit</th>
+                    <th className="text-right p-3 font-medium">Credit</th>
                     <th className="text-right p-3 font-medium">Balance</th>
+                    <th className="text-center p-3 font-medium">Status</th>
+                    <th className="text-right p-3 font-medium">Carry Forward</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -404,10 +486,31 @@ function MonthlyClosingPage() {
                       <td className="p-3 text-right tabular-nums">{bdt(p.rentShare)}</td>
                       <td className="p-3 text-right tabular-nums">{bdt(p.utilityShare)}</td>
                       <td className="p-3 text-right tabular-nums">{bdt(p.staffShare)}</td>
-                      <td className="p-3 text-right tabular-nums font-semibold">{bdt(p.totalDue)}</td>
+                      <td className="p-3 text-right tabular-nums">{bdt(p.previousDue)}</td>
+                      <td className="p-3 text-right tabular-nums font-semibold">{bdt(p.totalCharges)}</td>
+                      <td className="p-3 text-right tabular-nums text-primary">{bdt(p.totalContributions)}</td>
+                      <td className="p-3 text-right tabular-nums">{bdt(p.previousDeposit)}</td>
+                      <td className="p-3 text-right tabular-nums">{bdt(p.previousCredit)}</td>
                       <td className="p-3 text-right tabular-nums text-primary">{bdt(p.deposited)}</td>
+                      <td className="p-3 text-right tabular-nums text-destructive">{bdt(p.credited)}</td>
                       <td className={`p-3 text-right tabular-nums font-bold ${p.balance >= 0 ? "text-primary" : "text-destructive"}`}>
                         {bdt(p.balance)}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                          p.settlementStatus === "settled" ? "bg-primary/10 text-primary" :
+                          p.settlementStatus === "receive" ? "bg-green-500/10 text-green-600" :
+                          "bg-destructive/10 text-destructive"
+                        }`}>
+                          {p.settlementStatus === "receive" ? "Receive" :
+                           p.settlementStatus === "pay" ? "Pay" :
+                           "Settled"}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right tabular-nums text-xs">
+                        <span className="text-muted-foreground">
+                          D: {bdt(p.carryForwardDeposit)} C: {bdt(p.carryForwardCredit)}
+                        </span>
                       </td>
                     </tr>
                   ))}
