@@ -29,10 +29,30 @@ import {
   deleteDocFrom,
   type Member,
   type Room,
+  type Utility,
 } from "@/lib/data";
 import { Plus, Pencil, Trash2, UserCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
+import type { ServiceType } from "@/lib/types";
+
+// Service type to display name mapping
+const SERVICE_LABELS: Record<ServiceType, string> = {
+  rent: "Rent",
+  meals: "Meals",
+  internet: "Internet",
+  electricity: "Electricity",
+  gas: "Gas",
+  water: "Water",
+  cooking_staff: "Cooking Staff",
+  cleaning_staff: "Cleaning Staff",
+  security_staff: "Security Staff",
+  laundry: "Laundry",
+  parking: "Parking",
+  generator: "Generator",
+  maintenance: "Maintenance",
+  other_services: "Other Services",
+};
 
 export const Route = createFileRoute("/_authed/members")({
   component: MembersPage,
@@ -42,8 +62,60 @@ function MembersPage() {
   const { can, profile } = useAuth();
   const { data: members } = useCollection<Member>("members");
   const { data: rooms } = useCollection<Room>("rooms");
+  const { data: utilities } = useCollection<Utility>("utilities");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Member | null>(null);
+  
+  // Get unique utility types from utilities table
+   const uniqueUtilities = useMemo(() => {
+     const seen = new Set<string>();
+     return utilities.filter(u => {
+       const key = u.type.toLowerCase();
+       if (seen.has(key)) return false;
+       seen.add(key);
+       return true;
+     });
+   }, [utilities]);
+   
+   const utilityTypes = useMemo(() => {
+     return uniqueUtilities.map(u => u.type.toLowerCase());
+   }, [uniqueUtilities]);
+  
+  // Map utility type to service type
+  const getServiceType = (utilityType: string): ServiceType => {
+    const map: Record<string, ServiceType> = {
+      "electricity": "electricity",
+      "internet": "internet",
+      "gas": "gas",
+      "water": "water",
+      "generator": "generator",
+      "maintenance": "maintenance",
+      "bua salary": "other_services",
+      "garbage": "other_services",
+      "security": "other_services",
+      "rent": "rent",
+      "other": "other_services",
+    };
+    return map[utilityType] || "other_services";
+  };
+  
+  // Default service types (always available)
+  const defaultServiceTypes: ServiceType[] = [
+    "rent", "meals", "internet", "electricity", "gas", "water",
+    "cooking_staff", "cleaning_staff", "security_staff", "laundry",
+    "parking", "generator", "maintenance", "other_services"
+  ];
+  
+  // Get all available service types (from utilities + defaults)
+  const allServiceTypes = useMemo(() => {
+    const types = new Set<ServiceType>(defaultServiceTypes);
+    utilityTypes.forEach(ut => {
+      const serviceType = getServiceType(ut);
+      types.add(serviceType);
+    });
+    return Array.from(types);
+  }, [utilityTypes]);
+  
   const [form, setForm] = useState<Omit<Member, "id">>({
     name: "",
     email: "",
@@ -56,22 +128,7 @@ function MembersPage() {
     depositAmount: 0,
     securityDeposit: 0,
     previousDue: 0,
-    services: [
-      { type: "rent", enabled: true },
-      { type: "meals", enabled: true },
-      { type: "internet", enabled: false },
-      { type: "electricity", enabled: false },
-      { type: "gas", enabled: false },
-      { type: "water", enabled: false },
-      { type: "cooking_staff", enabled: false },
-      { type: "cleaning_staff", enabled: false },
-      { type: "security_staff", enabled: false },
-      { type: "laundry", enabled: false },
-      { type: "parking", enabled: false },
-      { type: "generator", enabled: false },
-      { type: "maintenance", enabled: false },
-      { type: "other_services", enabled: false },
-    ],
+    services: defaultServiceTypes.map(type => ({ type, enabled: type === "rent" || type === "meals" })),
   });
 
   const reset = () => {
@@ -87,22 +144,7 @@ function MembersPage() {
       depositAmount: 0,
       securityDeposit: 0,
       previousDue: 0,
-      services: [
-        { type: "rent", enabled: true },
-        { type: "meals", enabled: true },
-        { type: "internet", enabled: false },
-        { type: "electricity", enabled: false },
-        { type: "gas", enabled: false },
-        { type: "water", enabled: false },
-        { type: "cooking_staff", enabled: false },
-        { type: "cleaning_staff", enabled: false },
-        { type: "security_staff", enabled: false },
-        { type: "laundry", enabled: false },
-        { type: "parking", enabled: false },
-        { type: "generator", enabled: false },
-        { type: "maintenance", enabled: false },
-        { type: "other_services", enabled: false },
-      ],
+      services: allServiceTypes.map(type => ({ type, enabled: type === "rent" || type === "meals" })),
     });
     setEditing(null);
   };
@@ -131,22 +173,7 @@ function MembersPage() {
       previousDue: m.previousDue || 0,
       status: m.status || (m.active ? "active" : "inactive"),
       notes: m.notes || "",
-      services: m.services || [
-        { type: "rent", enabled: true },
-        { type: "meals", enabled: true },
-        { type: "internet", enabled: false },
-        { type: "electricity", enabled: false },
-        { type: "gas", enabled: false },
-        { type: "water", enabled: false },
-        { type: "cooking_staff", enabled: false },
-        { type: "cleaning_staff", enabled: false },
-        { type: "security_staff", enabled: false },
-        { type: "laundry", enabled: false },
-        { type: "parking", enabled: false },
-        { type: "generator", enabled: false },
-        { type: "maintenance", enabled: false },
-        { type: "other_services", enabled: false },
-      ],
+      services: m.services || allServiceTypes.map(type => ({ type, enabled: type === "rent" || type === "meals" })),
     });
     setOpen(true);
   };
@@ -481,38 +508,70 @@ function MembersPage() {
                     </Label>
                   </div>
                   <div className="space-y-2">
-                    <Label>Service Subscriptions</Label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {(form.services || []).map((service) => (
-                        <div
-                          key={service.type}
-                          className="flex items-center gap-2"
-                        >
-                          <input
-                            type="checkbox"
-                            id={`service-${service.type}`}
-                            checked={service.enabled}
-                            onChange={(e) =>
-                              setForm({
-                                ...form,
-                                services: (form.services || []).map((s) =>
-                                  s.type === service.type
-                                    ? { ...s, enabled: e.target.checked }
-                                    : s,
-                                ),
-                              })
-                            }
-                          />
-                          <Label
-                            htmlFor={`service-${service.type}`}
-                            className="text-sm capitalize"
-                          >
-                            {service.type.replace(/_/g, " ")}
-                          </Label>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                     <Label>Service Subscriptions</Label>
+                     <div className="grid grid-cols-2 gap-2">
+                       {/* Show default service types */}
+                       {defaultServiceTypes.map((serviceType) => (
+                         <div
+                           key={serviceType}
+                           className="flex items-center gap-2"
+                         >
+                           <input
+                             type="checkbox"
+                             id={`service-${serviceType}`}
+                             checked={(form.services || []).some(s => s.type === serviceType && s.enabled)}
+                             onChange={(e) => {
+                                const currentServices = form.services || defaultServiceTypes.map(t => ({ type: t as ServiceType, enabled: t === "rent" || t === "meals" }));
+                                const otherServices = currentServices.filter(s => s.type !== serviceType);
+                                setForm({
+                                  ...form,
+                                  services: [...otherServices, { type: serviceType, enabled: e.target.checked }],
+                                });
+                              }}
+                           />
+                           <Label
+                             htmlFor={`service-${serviceType}`}
+                             className="text-sm"
+                           >
+                             {SERVICE_LABELS[serviceType] || serviceType.replace(/_/g, " ")}
+                           </Label>
+                         </div>
+                       ))}
+                       {/* Show utility types from utilities table as other_services */}
+                       {uniqueUtilities.map((u) => {
+                         const serviceType = getServiceType(u.type.toLowerCase());
+                         if (serviceType === "other_services") {
+                           return (
+                             <div
+                               key={`util-${u.type.toLowerCase()}`}
+                               className="flex items-center gap-2"
+                             >
+                               <input
+                                 type="checkbox"
+                                 id={`service-util-${u.type.toLowerCase()}`}
+                                 checked={(form.services || []).some(s => s.type === "other_services" && s.enabled)}
+                                 onChange={(e) => {
+                                   const currentServices = form.services || defaultServiceTypes.map(t => ({ type: t as ServiceType, enabled: t === "rent" || t === "meals" }));
+                                   const otherServices = currentServices.filter(s => s.type !== "other_services");
+                                   setForm({
+                                     ...form,
+                                     services: [...otherServices, { type: "other_services" as ServiceType, enabled: e.target.checked }],
+                                   });
+                                 }}
+                               />
+                               <Label
+                                 htmlFor={`service-util-${u.type.toLowerCase()}`}
+                                 className="text-sm"
+                               >
+                                 {u.type}
+                               </Label>
+                             </div>
+                           );
+                         }
+                         return null;
+                       })}
+                     </div>
+                   </div>
                   <DialogFooter>
                     <Button type="submit">{editing ? "Save" : "Add"}</Button>
                   </DialogFooter>

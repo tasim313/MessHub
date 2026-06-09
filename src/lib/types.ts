@@ -34,17 +34,7 @@ export type ChangeRequestStatus = "pending" | "approved" | "rejected";
 
 export type ChangeRequestAction = "create" | "update" | "delete";
 
-export type UtilityType =
-  | "electricity"
-  | "internet"
-  | "gas"
-  | "water"
-  | "generator"
-  | "maintenance"
-  | "rent"
-  | "others";
-
-export type AllocationMethod = "equal" | "per_member" | "per_room" | "fixed" | "custom_percentage";
+export type AllocationMethod = "equal" | "per_member" | "per_room" | "fixed" | "custom_percentage" | "usage_based";
 
 export type BazarCategory =
   | "rice"
@@ -79,17 +69,207 @@ export type TransactionType =
   | "payment"
   | "credit"
   | "refund"
-  | "adjustment";
+  | "adjustment"
+  | "meal_charge"
+  | "rent_charge"
+  | "utility_charge"
+  | "staff_charge"
+  | "other_charge"
+  | "bazar_contribution"
+  | "expense_contribution"
+  | "monthly_closing";
 
 export type TransactionCategory =
   | "rent"
   | "meal"
   | "utility"
+  | "internet"
+  | "electricity"
+  | "gas"
+  | "water"
+  | "generator"
+  | "maintenance"
   | "staff"
   | "other"
   | "deposit"
   | "credit"
-  | "payment";
+  | "payment"
+  | "bazar_contribution"
+  | "food"
+  | "cleaning"
+  | "security"
+  | "furniture"
+  | "appliance"
+  | "kitchen"
+  | "repair"
+  | "garbage"
+  | "wifi"
+  | "cleaner_salary"
+  | "security_salary"
+  | "other_expense";
+
+// ============================================================================
+// Unified Expense System - Covers ALL shared expenses
+// ============================================================================
+
+/**
+ * All supported expense categories in the system.
+ * Every expense must fall under one of these categories.
+ */
+export type ExpenseCategory =
+  | "house_rent"
+  | "electricity"
+  | "water"
+  | "gas"
+  | "internet"
+  | "generator"
+  | "cleaner_salary"
+  | "security_salary"
+  | "maintenance"
+  | "repair"
+  | "garbage"
+  | "wifi_equipment"
+  | "kitchen"
+  | "furniture"
+  | "appliance"
+  | "other_shared";
+
+/**
+ * Human-readable labels for expense categories
+ */
+export const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
+  house_rent: "House Rent",
+  electricity: "Electricity Bill",
+  water: "Water Bill",
+  gas: "Gas Bill",
+  internet: "Internet Bill",
+  generator: "Generator Bill",
+  cleaner_salary: "Cleaner Salary",
+  security_salary: "Security Guard Salary",
+  maintenance: "Maintenance Cost",
+  repair: "Repair Cost",
+  garbage: "Garbage Collection",
+  wifi_equipment: "WiFi Equipment Cost",
+  kitchen: "Kitchen Expenses",
+  furniture: "Common Furniture Cost",
+  appliance: "Shared Appliance Cost",
+  other_shared: "Other Shared Expenses",
+};
+
+/**
+ * Service type mapping for each expense category (for subscription-based allocation)
+ */
+export const EXPENSE_CATEGORY_TO_SERVICE: Record<ExpenseCategory, ServiceType> = {
+  house_rent: "rent",
+  electricity: "electricity",
+  water: "water",
+  gas: "gas",
+  internet: "internet",
+  generator: "generator",
+  cleaner_salary: "cleaning_staff",
+  security_salary: "security_staff",
+  maintenance: "maintenance",
+  repair: "maintenance",
+  garbage: "other_services",
+  wifi_equipment: "internet",
+  kitchen: "other_services",
+  furniture: "other_services",
+  appliance: "other_services",
+  other_shared: "other_services",
+};
+
+/**
+ * Transaction category mapping for each expense category
+ */
+export const EXPENSE_CATEGORY_TO_TRANSACTION: Record<ExpenseCategory, TransactionCategory> = {
+  house_rent: "rent",
+  electricity: "electricity",
+  water: "water",
+  gas: "gas",
+  internet: "internet",
+  generator: "generator",
+  cleaner_salary: "cleaner_salary",
+  security_salary: "security_salary",
+  maintenance: "maintenance",
+  repair: "repair",
+  garbage: "garbage",
+  wifi_equipment: "wifi",
+  kitchen: "kitchen",
+  furniture: "furniture",
+  appliance: "appliance",
+  other_shared: "other_expense",
+};
+
+/**
+ * Expense status tracking
+ */
+export type ExpenseStatus = "pending" | "paid" | "partially_paid" | "overdue";
+
+/**
+ * Unified Expense Record - replaces the old Utility type
+ * Tracks every shared expense in the mess
+ */
+export interface Expense {
+  id: string;
+  ym: string;
+  category: ExpenseCategory;
+  amount: number;
+  description?: string;
+  date: string;
+  // Who paid (the person who paid on behalf of the mess)
+  paidBy?: string;
+  paidByName?: string;
+  // Allocation method
+  allocationMethod: AllocationMethod;
+  // Status
+  status: ExpenseStatus;
+  // Receipt/image URL
+  receiptUrl?: string;
+  // How much has been allocated vs paid
+  allocatedAmount?: number;
+  paidAmount?: number;
+  remainingAmount?: number;
+  // Notes
+  notes?: string;
+  // Metadata
+  createdAt?: number;
+  createdBy?: string;
+  updatedAt?: number;
+}
+
+/**
+ * Per-member expense allocation tracking
+ */
+export interface ExpenseAllocation {
+  id: string;
+  expenseId: string;
+  memberId: string;
+  memberName: string;
+  category: ExpenseCategory;
+  amount: number;
+  percentage?: number;
+  subscribed: boolean;
+  // Payment tracking
+  paidAmount?: number;
+  dueAmount?: number;
+  status?: "pending" | "paid" | "partial";
+  createdAt?: number;
+  createdBy?: string;
+}
+
+// ============================================================================
+// Legacy Types (Keep for backward compatibility)
+// ============================================================================
+
+export type UtilityType =
+  | "electricity"
+  | "internet"
+  | "gas"
+  | "water"
+  | "generator"
+  | "maintenance"
+  | "rent"
+  | "others";
 
 export interface AppUser {
   uid: string;
@@ -314,6 +494,11 @@ export interface Payment {
   status: PaymentStatus;
   referenceNo?: string;
   notes?: string;
+  // What the payment is for (expense category, rent, meal, etc.)
+  category?: string;
+  // Link to specific expense/utility record
+  referenceId?: string;
+  referenceType?: "expense" | "utility" | "rent" | "meal" | "bazar" | "staff" | "other";
   createdAt?: number;
   createdBy?: string;
 }

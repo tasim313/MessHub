@@ -1,16 +1,23 @@
 /**
  * Central calculation engine - Single source of truth for all monthly computations.
  * Uses service subscriptions for utility/staff splits and room-based rent.
+ *
+ * NOW WRAPS src/lib/calculations/engine.ts for complete consistency.
  */
 import type {
   MealEntry,
   Bazar,
   Utility,
+  Expense,
   Deposit,
+  Credit,
+  Payment,
   Member,
   Staff,
   Room,
-} from "./data";
+  LedgerEntry,
+} from "./types";
+import { computeMonthlySummary } from "./calculations/engine";
 
 export interface MonthlySummary {
   ym: string;
@@ -25,10 +32,14 @@ export interface MonthlySummary {
   utilityPerMember: number;
   staffCostPerMember: number;
   totalDeposits: number;
+  totalCredits: number;
+  totalPayments: number;
   cashBalance: number;
   vacantBeds: number;
   occupiedBeds: number;
   perMember: PerMember[];
+  settlements: import("./calculations/engine").MemberSettlement[];
+  settlementSummary: import("./calculations/engine").SettlementSummary;
 }
 
 export interface PerMember {
@@ -40,9 +51,26 @@ export interface PerMember {
   rentShare: number;
   staffShare: number;
   previousDue: number;
+  previousDeposit: number;
+  previousCredit: number;
   totalDue: number;
   deposited: number;
+  credited: number;
+  paid: number;
   balance: number;
+  settlementStatus: "pay" | "receive" | "settled";
+  payableAmount: number;
+  receivableAmount: number;
+  // New unified fields
+  totalCharges: number;
+  totalContributions: number;
+  expenseShares: Record<string, number>;
+  expenseContributions: Record<string, number>;
+  carryForwardDeposit: number;
+  carryForwardCredit: number;
+  // Detailed breakdown for UI
+  creditReason?: string;
+  depositSource?: string;
 }
 
 // Service type mapping for utilities
@@ -82,96 +110,87 @@ export function getPerBedRent(member: Member, rooms: Room[]): number {
 /**
  * Computes complete monthly summary with service subscription awareness.
  * All pages MUST use this instead of duplicating logic.
+ *
+ * NOW DELEGATES TO computeMonthlySummary from engine.ts
  */
 export function computeMonthly(
   ym: string,
   members: Member[],
   meals: MealEntry[],
   bazar: Bazar[],
-  utilities: Utility[],
+  utilities: Utility[] | Expense[],
   deposits: Deposit[],
+  credits: Credit[] = [],
+  payments: Payment[] = [],
   staff: Staff[] = [],
   rooms: Room[] = [],
+  ledgerEntries: LedgerEntry[] = [],
+  prevClosings: Array<{ month: string; memberId: string; deposit: number; credit: number }> = [],
 ): MonthlySummary {
-  const monthMeals = meals.filter((m) => m.ym === ym);
-  const monthBazar = bazar.filter((b) => b.ym === ym);
-  const monthUtilities = utilities.filter((u) => u.ym === ym);
-  const monthDeposits = deposits.filter((d) => d.ym === ym);
-  const activeMembers = members.filter((m) => m.active);
+  const result = computeMonthlySummary(
+    ym,
+    members,
+    meals,
+    bazar,
+    utilities,
+    deposits,
+    credits,
+    payments,
+    staff,
+    rooms,
+    ledgerEntries,
+    [],
+    prevClosings
+  );
 
-  // Core aggregations
-  const totalBazar = monthBazar.reduce((s, b) => s + b.total, 0);
-  const totalMeals = monthMeals.reduce((s, m) => s + (m.breakfast || 0) + (m.lunch || 0) + (m.dinner || 0) + (m.guest || 0), 0);
-  const mealRate = totalMeals > 0 ? totalBazar / totalMeals : 0;
-  const totalUtilities = monthUtilities.reduce((s, u) => s + u.amount, 0);
-  const totalStaffCost = staff.filter((s) => s.status !== "inactive").reduce((sum, item) => sum + (item.salary || 0) + (item.overtime || 0) + (item.bonus || 0) - (item.advance || 0), 0);
-  const totalDeposits = monthDeposits.reduce((s, d) => s + d.amount, 0);
-
-  // Rent from rooms (per-bed)
-  const totalRent = activeMembers.reduce((sum, m) => sum + getPerBedRent(m, rooms), 0);
-  const totalPreviousDue = activeMembers.reduce((sum, m) => sum + (m.previousDue || 0), 0);
-
-  const occupiedBeds = activeMembers.filter((m) => m.roomId || m.roomName || m.bedNo).length;
-  const totalBeds = rooms.reduce((sum, r) => sum + (r.totalBeds || 0), 0);
-  const vacantBeds = Math.max(0, totalBeds - occupiedBeds);
-
-  const perMember: PerMember[] = activeMembers.map((m) => {
-    // Meals
-    const mealsCount = monthMeals.filter((x) => x.memberId === m.id).reduce(
-      (s, x) => s + (x.breakfast || 0) + (x.lunch || 0) + (x.dinner || 0) + (x.guest || 0), 0
-    );
-    const mealCost = mealsCount * mealRate;
-    
-    // Deposits
-    const deposited = monthDeposits.filter((d) => d.memberId === m.id).reduce((s, d) => s + d.amount, 0);
-    
-    // Per-bed rent from room
-    const rentShare = getPerBedRent(m, rooms);
-    
-    // Service-subscription-aware utility share
-    let myUtility = 0;
-    monthUtilities.forEach((u) => {
-      const serviceType = UTILITY_SERVICE_MAP[u.type as string];
-      // For "others" type or unknown types, all active members are subscribers
-      const subscribers = serviceType 
-        ? activeMembers.filter((mem) => isMemberSubscribedToService(mem, serviceType)).length || 1
-        : activeMembers.length || 1;
-      
-      if (!serviceType || isMemberSubscribedToService(m, serviceType)) {
-        myUtility += u.amount / subscribers;
-      }
-    });
-    
-    // Service-subscription-aware staff share
-    let myStaff = 0;
-    staff.filter((s) => s.status !== "inactive").forEach((s) => {
-      const serviceType = STAFF_SERVICE_MAP[s.role] || "other_services";
-      const subscribers = activeMembers.filter((mem) => isMemberSubscribedToService(mem, serviceType)).length || 1;
-      if (isMemberSubscribedToService(m, serviceType)) {
-        myStaff += (s.salary || 0) / subscribers;
-      }
-    });
-
-    const previousDue = m.previousDue || 0;
-    const totalDue = mealCost + myUtility + rentShare + myStaff + previousDue;
-    
-    return {
-      memberId: m.id, memberName: m.name,
-      meals: mealsCount, mealCost,
-      utilityShare: myUtility, rentShare, staffShare: myStaff,
-      previousDue, totalDue, deposited,
-      balance: deposited - totalDue,
-    };
-  });
-
-  const totalExpense = totalBazar + totalUtilities + totalStaffCost;
-
+  // Convert to legacy format for backward compatibility
   return {
-    ym, totalMeals, totalBazar, totalUtilities, totalRent, totalStaffCost,
-    totalPreviousDue, totalExpense, mealRate,
-    utilityPerMember: totalUtilities / (activeMembers.length || 1),
-    staffCostPerMember: totalStaffCost / (activeMembers.length || 1),
-    totalDeposits, cashBalance: totalDeposits - totalExpense,
-    vacantBeds, occupiedBeds, perMember,
+    ym: result.ym,
+    totalMeals: result.totalMeals,
+    totalBazar: result.totalBazar,
+    totalUtilities: result.totalUtilities,
+    totalRent: result.totalRent,
+    totalStaffCost: result.totalStaffCost,
+    totalPreviousDue: result.totalPreviousDue,
+    totalExpense: result.totalExpense,
+    mealRate: result.mealRate,
+    utilityPerMember: result.utilityPerMember,
+    staffCostPerMember: result.staffCostPerMember,
+    totalDeposits: result.totalDeposits,
+    totalCredits: result.totalCredits,
+    totalPayments: result.totalPayments,
+    cashBalance: result.cashBalance,
+    vacantBeds: result.vacantBeds,
+    occupiedBeds: result.occupiedBeds,
+    perMember: result.perMember.map((p) => ({
+      memberId: p.memberId,
+      memberName: p.memberName,
+      meals: p.meals,
+      mealCost: p.mealCost,
+      utilityShare: p.utilityShare,
+      rentShare: p.rentShare,
+      staffShare: p.staffShare,
+      previousDue: p.previousDue,
+      previousDeposit: p.previousDeposit,
+      previousCredit: p.previousCredit,
+      totalDue: p.totalDue,
+      deposited: p.deposited,
+      credited: p.credited,
+      paid: p.paid,
+      balance: p.balance,
+      settlementStatus: p.settlementStatus,
+      payableAmount: p.payableAmount,
+      receivableAmount: p.receivableAmount,
+      totalCharges: p.totalCharges,
+      totalContributions: p.totalContributions,
+      expenseShares: p.expenseShares,
+      expenseContributions: p.expenseContributions,
+      carryForwardDeposit: p.carryForwardDeposit,
+      carryForwardCredit: p.carryForwardCredit,
+      creditReason: p.creditReason,
+      depositSource: p.depositSource,
+    })),
+    settlements: result.settlements,
+    settlementSummary: result.settlementSummary,
   };
 }
