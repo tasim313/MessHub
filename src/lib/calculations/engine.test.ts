@@ -1032,3 +1032,304 @@ describe("Edge Cases", () => {
     expect(settlement.settlementStatus).toBe("receive");
   });
 });
+
+// ============================================================================
+// Cross-Verification Tests (ঐকিক নিয়ম / Unitary Method)
+// ============================================================================
+
+describe("Cross-Verification: Multiple Calculation Methods Must Match", () => {
+  it("Method 1 & 2: Total Bazar / Total Meals = Individual Meal Rate", () => {
+    const bazar = [createBazarEntry({ total: 30000 })];
+    const meals = [
+      createMealEntry({ memberId: "member-1", breakfast: 1, lunch: 1, dinner: 1 }), // 3
+      createMealEntry({ memberId: "member-2", breakfast: 1, lunch: 1, dinner: 0 }), // 2
+    ];
+
+    const rateInfo = calculateMealRate(bazar, meals, "2024-01");
+    const expectedRate = 30000 / 5; // 6000
+
+    expect(rateInfo.mealRate).toBeCloseTo(expectedRate, 5);
+    // Individual meal cost sum must equal total bazar
+    const member1Cost = 3 * expectedRate;
+    const member2Cost = 2 * expectedRate;
+    expect(member1Cost + member2Cost).toBeCloseTo(30000, 0);
+  });
+
+  it("Method 3: Sum of all member charges must equal total expenses + rent", () => {
+    const members = [
+      createMember({ id: "member-1", name: "A", monthlyRent: 5000 }),
+      createMember({ id: "member-2", name: "B", monthlyRent: 5000 }),
+    ];
+    const rooms = [createRoom({ id: "room-1", totalBeds: 2, monthlyRent: 10000 })];
+    const bazar = [createBazarEntry({ total: 15000 })];
+    const meals = [
+      createMealEntry({ memberId: "member-1", breakfast: 1, lunch: 1, dinner: 1 }), // 3
+      createMealEntry({ memberId: "member-2", breakfast: 1, lunch: 1, dinner: 1 }), // 3
+    ];
+
+    const summary = computeMonthlySummary(
+      "2024-01", members, meals, bazar, [],
+      [], [], [], [], rooms, [],
+    );
+
+    // Sum of all member meal costs = total bazar
+    const totalMealCosts = summary.perMember.reduce((s, p) => s + p.mealCost, 0);
+    expect(totalMealCosts).toBeCloseTo(summary.totalBazar, 0);
+
+    // Sum of all member rent shares = total rent
+    const totalRentShares = summary.perMember.reduce((s, p) => s + p.rentShare, 0);
+    expect(totalRentShares).toBeCloseTo(summary.totalRent, 0);
+  });
+
+  it("Method 4: Net Balance = Contributions - Charges for every member", () => {
+    const members = [
+      createMember({ id: "member-1", name: "A" }),
+      createMember({ id: "member-2", name: "B" }),
+    ];
+    const bazar = [createBazarEntry({ buyerId: "member-1", total: 10000 })];
+    const meals = [
+      createMealEntry({ memberId: "member-1", breakfast: 1, lunch: 1, dinner: 1 }),
+      createMealEntry({ memberId: "member-2", breakfast: 1, lunch: 1, dinner: 1 }),
+    ];
+
+    const settlements = calculateAllSettlements(members, "2024-01", meals, bazar, [], [], []);
+
+    settlements.forEach((s) => {
+      // Balance must equal contributions - charges
+      const expectedBalance = s.contributions.totalContribution - s.charges.totalCharges;
+      expect(s.balance).toBeCloseTo(expectedBalance, 2);
+
+      // Deposit + Credit must equal ABS(balance)
+      expect(s.totalDeposit + s.totalCredit).toBeCloseTo(Math.abs(s.balance), 2);
+
+      // Mutual exclusivity
+      if (s.totalDeposit > 0) expect(s.totalCredit).toBe(0);
+      if (s.totalCredit > 0) expect(s.totalDeposit).toBe(0);
+    });
+  });
+
+  it("Method 5: Settlement summary payable + receivable should balance", () => {
+    const members = [
+      createMember({ id: "member-1", name: "A" }),
+      createMember({ id: "member-2", name: "B" }),
+      createMember({ id: "member-3", name: "C" }),
+    ];
+    const bazar = [
+      createBazarEntry({ buyerId: "member-1", total: 20000 }),
+      createBazarEntry({ buyerId: "member-2", total: 5000 }),
+    ];
+    const meals = [
+      createMealEntry({ memberId: "member-1", breakfast: 1, lunch: 1, dinner: 1 }), // 3
+      createMealEntry({ memberId: "member-2", breakfast: 1, lunch: 1, dinner: 1 }), // 3
+      createMealEntry({ memberId: "member-3", breakfast: 1, lunch: 1, dinner: 1 }), // 3
+    ];
+
+    const settlements = calculateAllSettlements(members, "2024-01", meals, bazar, [], [], []);
+    const summary = getSettlementSummary(settlements);
+
+    // Total balance across all members should sum to 0 in an isolated system
+    // (overpayments of some members = underpayments of others, roughly)
+    // Actually totalBalance = sum of all (contributions - charges)
+    expect(summary.totalBalance).toBeCloseTo(
+      settlements.reduce((s, st) => s + st.balance, 0), 2
+    );
+
+    // Payable = sum of negative balances (absolute)
+    expect(summary.totalPayable).toBeCloseTo(
+      settlements.filter(s => s.balance < 0).reduce((s, st) => s + Math.abs(st.balance), 0), 2
+    );
+
+    // Receivable = sum of positive balances
+    expect(summary.totalReceivable).toBeCloseTo(
+      settlements.filter(s => s.balance > 0).reduce((s, st) => s + st.balance, 0), 2
+    );
+  });
+});
+
+// ============================================================================
+// Carry Forward Tests
+// ============================================================================
+
+describe("Carry Forward Logic", () => {
+  it("should carry forward deposit from previous month", () => {
+    const member = createMember();
+    const prevClosings = [
+      { month: "2023-12", memberId: "member-1", deposit: 3000, credit: 0 },
+    ];
+
+    const bazar = [createBazarEntry({ buyerId: "member-1", total: 5000 })];
+    const meals = [createMealEntry({ memberId: "member-1", breakfast: 1, lunch: 1, dinner: 1 })];
+
+    const settlement = calculateMemberSettlement(
+      member, "2024-01", meals, bazar, [], [], [],
+      [], [], [member], [], [], prevClosings
+    );
+
+    // Previous deposit of 3000 should reduce current charges
+    expect(settlement.charges.previousDeposit).toBe(3000);
+    // Meal rate = 5000/3 ≈ 1666.67, meal cost = 5000
+    // Charges = 5000 (meal) - 3000 (prev deposit) = 2000
+    // Contributions = 5000 (bazar)
+    // Balance = 5000 - 2000 = 3000 (receive)
+    expect(settlement.balance).toBeCloseTo(3000, 0);
+    expect(settlement.settlementStatus).toBe("receive");
+  });
+
+  it("should carry forward credit from previous month", () => {
+    const member = createMember();
+    const prevClosings = [
+      { month: "2023-12", memberId: "member-1", deposit: 0, credit: 2000 },
+    ];
+
+    const bazar = [createBazarEntry({ buyerId: "member-1", total: 5000 })];
+    const meals = [createMealEntry({ memberId: "member-1", breakfast: 1, lunch: 1, dinner: 1 })];
+
+    const settlement = calculateMemberSettlement(
+      member, "2024-01", meals, bazar, [], [], [],
+      [], [], [member], [], [], prevClosings
+    );
+
+    // Previous credit of 2000 should add to current charges
+    expect(settlement.charges.previousCredit).toBe(2000);
+    // Meal cost = 5000, Charges = 5000 + 2000 = 7000
+    // Contributions = 5000 (bazar)
+    // Balance = 5000 - 7000 = -2000 (pay)
+    expect(settlement.balance).toBeCloseTo(-2000, 0);
+    expect(settlement.settlementStatus).toBe("pay");
+    expect(settlement.totalCredit).toBeCloseTo(2000, 0);
+  });
+
+  it("should have zero carry forward when no previous closing exists", () => {
+    const member = createMember();
+    const settlement = calculateMemberSettlement(
+      member, "2024-01",
+      [createMealEntry()],
+      [createBazarEntry()],
+      [], [], [],
+    );
+
+    expect(settlement.charges.previousDeposit).toBe(0);
+    expect(settlement.charges.previousCredit).toBe(0);
+  });
+});
+
+// ============================================================================
+// Cash Balance Tests
+// ============================================================================
+
+describe("Cash Balance Calculation", () => {
+  it("cashBalance = deposits + payments - credits - expenses", () => {
+    const members = [createMember({ id: "member-1" })];
+    const rooms = [createRoom({ id: "room-1", totalBeds: 1, monthlyRent: 5000 })];
+    const bazar = [createBazarEntry({ total: 10000 })];
+    const meals = [createMealEntry({ memberId: "member-1", breakfast: 1, lunch: 1, dinner: 1 })];
+    const deposits = [createDeposit({ amount: 8000 })];
+    const payments = [createPayment({ amount: 3000 })];
+    const credits = [createCredit({ amount: 1000 })];
+
+    const summary = computeMonthlySummary(
+      "2024-01", members, meals, bazar, [],
+      deposits, credits, payments, [], rooms, [],
+    );
+
+    // Total expense = bazar(10000) + utilities(0) + staff(0) = 10000
+    // cashBalance = deposits(8000) + payments(3000) - credits(1000) - expenses(10000) = 0
+    expect(summary.cashBalance).toBe(0);
+    expect(summary.totalExpense).toBe(10000);
+  });
+
+  it("perMember uses settlement values (no double calculation)", () => {
+    const staff = [createStaff({ id: "s1", name: "Cook", role: "cook", salary: 10000 })];
+    const members = [
+      createMember({ id: "member-1", name: "A", services: [
+        { type: "meals", enabled: true },
+        { type: "cooking_staff", enabled: true },
+      ]}),
+    ];
+    const rooms = [createRoom({ id: "room-1", totalBeds: 1, monthlyRent: 5000 })];
+
+    const summary = computeMonthlySummary(
+      "2024-01", members, [], [], [],
+      [], [], [], staff, rooms, [],
+    );
+
+    // Staff share for member-1 should be 10000 (only subscriber)
+    const p = summary.perMember[0];
+    expect(p.staffShare).toBe(10000);
+    // Total charges must be >= staff share (staff is a component of total charges)
+    expect(p.totalCharges).toBeGreaterThanOrEqual(p.staffShare);
+    // Rent should also be included
+    expect(p.totalCharges).toBeGreaterThanOrEqual(p.rentShare);
+  });
+});
+
+// ============================================================================
+// Unitary Method (ঐকিক নিয়ম) Verification Tests
+// ============================================================================
+
+describe("Unitary Method (ঐকিক নিয়ম) Verification", () => {
+  it("meal cost per member = total bazar × (member meals / total meals)", () => {
+    const members = [
+      createMember({ id: "m1", name: "A" }),
+      createMember({ id: "m2", name: "B" }),
+      createMember({ id: "m3", name: "C" }),
+    ];
+    const bazar = [createBazarEntry({ total: 60000 })];
+    const meals = [
+      createMealEntry({ memberId: "m1", breakfast: 2, lunch: 2, dinner: 2 }), // 6 meals
+      createMealEntry({ memberId: "m2", breakfast: 1, lunch: 1, dinner: 1 }), // 3 meals
+      createMealEntry({ memberId: "m3", breakfast: 1, lunch: 0, dinner: 1 }), // 2 meals
+    ];
+
+    const settlements = calculateAllSettlements(members, "2024-01", meals, bazar, [], [], []);
+
+    const totalMeals = 11;
+    const mealRate = 60000 / totalMeals;
+
+    // A: 6 meals × rate = 32727.27
+    const a = settlements.find(s => s.memberId === "m1")!;
+    expect(a.mealCost).toBeCloseTo(6 * mealRate, 0);
+
+    // B: 3 meals × rate = 16363.64
+    const b = settlements.find(s => s.memberId === "m2")!;
+    expect(b.mealCost).toBeCloseTo(3 * mealRate, 0);
+
+    // C: 2 meals × rate = 10909.09
+    const c = settlements.find(s => s.memberId === "m3")!;
+    expect(c.mealCost).toBeCloseTo(2 * mealRate, 0);
+
+    // Sum must equal total bazar
+    expect(a.mealCost + b.mealCost + c.mealCost).toBeCloseTo(60000, 0);
+  });
+
+  it("expense share per member = total expense × (1 / subscriber count)", () => {
+    const members = [
+      createMember({ id: "m1", name: "A", services: [{ type: "electricity", enabled: true }] }),
+      createMember({ id: "m2", name: "B", services: [{ type: "electricity", enabled: true }] }),
+      createMember({ id: "m3", name: "C", services: [] }), // Not subscribed
+    ];
+
+    const expenses = [{
+      id: "exp1", ym: "2024-01", category: "electricity" as const,
+      amount: 3000, date: "2024-01-15", allocationMethod: "equal" as const, status: "paid" as const,
+    }];
+
+    const summary = computeMonthlySummary(
+      "2024-01", members, [], [], expenses,
+      [], [], [], [], [], [],
+    );
+
+    // Only m1 and m2 are subscribed to electricity
+    // Each pays 3000 / 2 = 1500
+    const p1 = summary.perMember.find(p => p.memberId === "m1")!;
+    const p2 = summary.perMember.find(p => p.memberId === "m2")!;
+    const p3 = summary.perMember.find(p => p.memberId === "m3")!;
+
+    expect(p1.utilityShare).toBeCloseTo(1500, 0);
+    expect(p2.utilityShare).toBeCloseTo(1500, 0);
+    expect(p3.utilityShare).toBe(0); // Not subscribed
+
+    // Sum of shares must equal total expense
+    expect(p1.utilityShare + p2.utilityShare + p3.utilityShare).toBeCloseTo(3000, 0);
+  });
+});

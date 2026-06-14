@@ -112,7 +112,8 @@ function DashboardPage() {
     [ym, members, meals, bazar, utilities, deposits, credits, payments, staff, rooms, prevClosings],
   );
 
-  const balance = summary.totalDeposits - summary.totalExpense;
+  // Use the correctly computed cashBalance from the engine
+  const balance = summary.cashBalance;
   const mySummary = currentMember
     ? summary.perMember.find((item) => item.memberId === currentMember.id)
     : null;

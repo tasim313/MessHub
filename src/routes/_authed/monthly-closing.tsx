@@ -64,10 +64,29 @@ function MonthlyClosingPage() {
   const monthExpenses = useMemo(() => expenses.filter((e) => e.ym === ym), [expenses, ym]);
   const activeStaff = useMemo(() => staff.filter((s) => s.status !== "inactive"), [staff]);
 
+  // Build prevClosings for carry forward
+  const prevClosings = useMemo(() => {
+    if (!closings.length) return [];
+    const [year, month] = ym.split("-").map(Number);
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const prevYear = month === 1 ? year - 1 : year;
+    const prevYm = `${prevYear}-${String(prevMonth).padStart(2, "0")}`;
+    const prevClosing = closings.find((c) => c.month === prevYm);
+    if (!prevClosing || prevClosing.status !== "closed") return [];
+    
+    const breakdown = (prevClosing as any).memberBreakdown || {};
+    return Object.entries(breakdown).map(([memberId, data]: [string, any]) => ({
+      month: prevYm,
+      memberId,
+      deposit: data.deposit || 0,
+      credit: data.credit || 0,
+    }));
+  }, [closings, ym]);
+
   const monthSummary = useMemo(
     () =>
-      computeMonthly(ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms),
-    [ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms],
+      computeMonthly(ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms, [], prevClosings),
+    [ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms, prevClosings],
   );
 
   const existingClosing = useMemo(
@@ -138,7 +157,7 @@ function MonthlyClosingPage() {
         year: parseInt(ym.split("-")[0], 10),
         totalIncome: monthSummary.perMember.reduce((s, p) => s + p.rentShare, 0) + monthSummary.totalPayments,
         totalExpense: monthSummary.totalExpense,
-        netProfit: (monthSummary.totalDeposits + monthSummary.totalPayments) - monthSummary.totalExpense,
+        netProfit: monthSummary.totalRent + monthSummary.totalPayments - monthSummary.totalExpense,
         totalRent: monthSummary.totalRent,
         totalMeal: monthSummary.totalBazar,
         totalUtility: monthSummary.totalUtilities,
