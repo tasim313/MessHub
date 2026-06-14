@@ -485,63 +485,70 @@ function MonthlyClosingPage() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-xs uppercase text-muted-foreground bg-muted/50">
-                  <tr>
-                    <th className="text-left p-3 font-medium">Member</th>
-                    <th className="text-right p-3 font-medium">Meals</th>
-                    <th className="text-right p-3 font-medium">Meal Cost</th>
-                    <th className="text-right p-3 font-medium">Rent</th>
-                    <th className="text-right p-3 font-medium">Expenses</th>
-                    <th className="text-right p-3 font-medium">Staff</th>
-                    <th className="text-right p-3 font-medium">Other Charges</th>
-                    <th className="text-right p-3 font-medium">Total Charges</th>
-                    <th className="text-right p-3 font-medium">Contributions</th>
-                    <th className="text-right p-3 font-medium">Prev Deposit</th>
-                    <th className="text-right p-3 font-medium">Prev Credit</th>
-                    <th className="text-right p-3 font-medium">Deposit</th>
-                    <th className="text-right p-3 font-medium">Credit</th>
-                    <th className="text-right p-3 font-medium">Balance</th>
-                    <th className="text-center p-3 font-medium">Status</th>
-                    <th className="text-right p-3 font-medium">Carry Forward</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {monthSummary.perMember.map((p) => (
-                    <tr key={p.memberId} className="border-t hover:bg-muted/30">
-                      <td className="p-3 font-medium">{p.memberName}</td>
-                      <td className="p-3 text-right tabular-nums">{p.meals}</td>
-                      <td className="p-3 text-right tabular-nums">{bdt(p.mealCost)}</td>
-                      <td className="p-3 text-right tabular-nums">{bdt(p.rentShare)}</td>
-                      <td className="p-3 text-right tabular-nums">{bdt(p.utilityShare)}</td>
-                      <td className="p-3 text-right tabular-nums">{bdt(p.staffShare)}</td>
-                      <td className="p-3 text-right tabular-nums">{bdt(p.previousDue)}</td>
-                      <td className="p-3 text-right tabular-nums font-semibold">{bdt(p.totalCharges)}</td>
-                      <td className="p-3 text-right tabular-nums text-primary">{bdt(p.totalContributions)}</td>
-                      <td className="p-3 text-right tabular-nums">{bdt(p.previousDeposit)}</td>
-                      <td className="p-3 text-right tabular-nums">{bdt(p.previousCredit)}</td>
-                      <td className="p-3 text-right tabular-nums text-primary">{bdt(p.deposited)}</td>
-                      <td className="p-3 text-right tabular-nums text-destructive">{bdt(p.credited)}</td>
-                      <td className={`p-3 text-right tabular-nums font-bold ${p.balance >= 0 ? "text-primary" : "text-destructive"}`}>
-                        {bdt(p.balance)}
-                      </td>
-                      <td className="p-3 text-center">
-                        <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
-                          p.settlementStatus === "settled" ? "bg-primary/10 text-primary" :
-                          p.settlementStatus === "receive" ? "bg-green-500/10 text-green-600" :
-                          "bg-destructive/10 text-destructive"
-                        }`}>
-                          {p.settlementStatus === "receive" ? "Receive" :
-                           p.settlementStatus === "pay" ? "Pay" :
-                           "Settled"}
-                        </span>
-                      </td>
-                      <td className="p-3 text-right tabular-nums text-xs">
-                        <span className="text-muted-foreground">
-                          D: {bdt(p.carryForwardDeposit)} C: {bdt(p.carryForwardCredit)}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
+                   <tr>
+                     <th className="text-left p-3 font-medium">Member</th>
+                     <th className="text-right p-3 font-medium">Meals</th>
+                     <th className="text-right p-3 font-medium">Meal Cost</th>
+                     <th className="text-right p-3 font-medium">Rent</th>
+                     <th className="text-right p-3 font-medium">Expenses</th>
+                     <th className="text-right p-3 font-medium">Staff</th>
+                     <th className="text-right p-3 font-medium">Other Charges</th>
+                     <th className="text-right p-3 font-medium">Total Charges</th>
+                     <th className="text-right p-3 font-medium">Contributions</th>
+                     <th className="text-right p-3 font-medium">Prev Deposit</th>
+                     <th className="text-right p-3 font-medium">Prev Credit</th>
+                     <th className="text-right p-3 font-medium">Deposit</th>
+                     <th className="text-right p-3 font-medium">Credit</th>
+                     <th className="text-right p-3 font-medium">Balance</th>
+                     <th className="text-center p-3 font-medium">Status</th>
+                     <th className="text-left p-3 font-medium">Reason</th>
+                     <th className="text-right p-3 font-medium">Carry Forward</th>
+                   </tr>
+                 </thead>
+                 <tbody>
+                   {monthSummary.perMember.map((p) => {
+                     const reason = p.balance >= 0 ? p.depositSource : p.creditReason;
+                     return (
+                       <tr key={p.memberId} className="border-t hover:bg-muted/30">
+                         <td className="p-3 font-medium">{p.memberName}</td>
+                         <td className="p-3 text-right tabular-nums">{p.meals}</td>
+                         <td className="p-3 text-right tabular-nums">{bdt(p.mealCost)}</td>
+                         <td className="p-3 text-right tabular-nums">{bdt(p.rentShare)}</td>
+                         <td className="p-3 text-right tabular-nums">{bdt(p.utilityShare)}</td>
+                         <td className="p-3 text-right tabular-nums">{bdt(p.staffShare)}</td>
+                         <td className="p-3 text-right tabular-nums">{bdt(p.previousDue)}</td>
+                         <td className="p-3 text-right tabular-nums font-semibold">{bdt(p.totalCharges)}</td>
+                         <td className="p-3 text-right tabular-nums text-primary">{bdt(p.totalContributions)}</td>
+                         <td className="p-3 text-right tabular-nums">{bdt(p.previousDeposit)}</td>
+                         <td className="p-3 text-right tabular-nums">{bdt(p.previousCredit)}</td>
+                         <td className="p-3 text-right tabular-nums text-primary">{bdt(p.deposited)}</td>
+                         <td className="p-3 text-right tabular-nums text-destructive">{bdt(p.credited)}</td>
+                         <td className={`p-3 text-right tabular-nums font-bold ${p.balance >= 0 ? "text-primary" : "text-destructive"}`}>
+                           {bdt(p.balance)}
+                         </td>
+                         <td className="p-3 text-center">
+                           <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                             p.settlementStatus === "settled" ? "bg-primary/10 text-primary" :
+                             p.settlementStatus === "receive" ? "bg-green-500/10 text-green-600" :
+                             "bg-destructive/10 text-destructive"
+                           }`}>
+                             {p.settlementStatus === "receive" ? "Receive" :
+                              p.settlementStatus === "pay" ? "Pay" :
+                              "Settled"}
+                           </span>
+                         </td>
+                         <td className="p-3 text-xs text-muted-foreground max-w-[200px] truncate" title={reason || ""}>
+                           {reason || "—"}
+                         </td>
+                         <td className="p-3 text-right tabular-nums text-xs">
+                           <span className="text-muted-foreground">
+                             D: {bdt(p.carryForwardDeposit)} C: {bdt(p.carryForwardCredit)}
+                           </span>
+                         </td>
+                       </tr>
+                     );
+                   })}
+                 </tbody>
               </table>
             </div>
           )}

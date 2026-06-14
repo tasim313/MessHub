@@ -17,6 +17,7 @@ import { Plus, Trash2, Banknote, Pencil, Search, Filter, X } from "lucide-react"
 import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
 import { checkPaymentReferenceExists } from "@/lib/duplicate-check";
+import { recordPaymentWithAdvanceRecovery } from "@/lib/payment-service";
 import type { Payment } from "@/lib/types";
 import { EXPENSE_CATEGORY_LABELS } from "@/lib/types";
 
@@ -154,10 +155,72 @@ function PaymentsPage() {
     if (form.referenceNo && await checkPaymentReferenceExists(form.referenceNo, form.date)) return toast.error("Payment with this reference already exists for this date");
 
     try {
-      const payload = { memberId: form.memberId, memberName: member.name, amount, method: form.method, date: form.date, ym: form.date.slice(0, 7), status: form.status, referenceNo: form.referenceNo, notes: form.notes, category: form.category || undefined };
-      if (profile?.role === "owner" && editing) { await updateDocIn("payments", editing.id, payload); toast.success("Payment updated"); }
-      else if (profile?.role === "owner") { await addDocTo("payments", payload); await addDocTo("ledgers", { memberId: form.memberId, memberName: member.name, date: form.date, ym: form.date.slice(0, 7), transactionType: "payment", category: form.category || "payment", amount, notes: form.notes || `Payment via ${form.method}` }); toast.success("Payment recorded"); }
-      else if (profile) { await submitChangeRequest({ collectionName: "payments", action: editing ? "update" : "create", title: `${editing ? "Update" : "Add"} payment for ${member.name}`, actor: { uid: profile.uid, name: profile.name, role: profile.role }, targetId: editing?.id, payload, previousData: editing || null }); toast.success("Request sent to admin"); }
+      if (profile?.role === "owner" && editing) {
+        await updateDocIn("payments", editing.id, {
+          memberId: form.memberId,
+          memberName: member.name,
+          amount,
+          method: form.method,
+          date: form.date,
+          ym: form.date.slice(0, 7),
+          status: form.status,
+          referenceNo: form.referenceNo,
+          notes: form.notes,
+          category: form.category || undefined,
+        });
+        toast.success("Payment updated");
+      }
+      else if (profile?.role === "owner") {
+        // Use the automatic payment service that handles advance recovery
+        const result = await recordPaymentWithAdvanceRecovery(
+          form.memberId,
+          member.name,
+          amount,
+          form.method,
+          form.date,
+          form.date.slice(0, 7),
+          form.category || "other",
+          form.notes,
+          undefined,
+          profile?.uid
+        );
+        
+        let msg = "Payment recorded";
+        if (result.advanceRecoveryAmount > 0) {
+          msg += ` - recovered ${bdt(result.advanceRecoveryAmount)} from advances`;
+        }
+        if (result.chargePaymentAmount > 0) {
+          msg += ` - ${bdt(result.chargePaymentAmount)} applied to charges`;
+        }
+        if (result.remainingAmount > 0) {
+          msg += ` - ${bdt(result.remainingAmount)} becomes deposit`;
+        }
+        toast.success(msg);
+      }
+      else if (profile) {
+        const payload = {
+          memberId: form.memberId,
+          memberName: member.name,
+          amount,
+          method: form.method,
+          date: form.date,
+          ym: form.date.slice(0, 7),
+          status: form.status,
+          referenceNo: form.referenceNo,
+          notes: form.notes,
+          category: form.category || undefined,
+        };
+        await submitChangeRequest({
+          collectionName: "payments",
+          action: editing ? "update" : "create",
+          title: `${editing ? "Update" : "Add"} payment for ${member.name}`,
+          actor: { uid: profile.uid, name: profile.name, role: profile.role },
+          targetId: editing?.id,
+          payload,
+          previousData: editing || null,
+        });
+        toast.success("Request sent to admin");
+      }
       setOpen(false);
       resetForm();
     } catch (err) { toast.error((err as Error).message); }
