@@ -12,6 +12,8 @@ import {
   type Bazar,
   type Utility,
   type Deposit,
+  type Credit,
+  type Payment,
   type Staff,
   type Room,
 } from "@/lib/data";
@@ -47,6 +49,8 @@ function ReportsPage() {
   const { data: bazar } = useCollection<Bazar>("bazar");
   const { data: utilities } = useCollection<Utility>("utilities");
   const { data: deposits } = useCollection<Deposit>("deposits");
+  const { data: credits } = useCollection<Credit>("credits");
+  const { data: payments } = useCollection<Payment>("payments");
   const { data: staff } = useCollection<Staff>("staff");
   const { data: rooms } = useCollection<Room>("rooms");
 
@@ -59,12 +63,12 @@ function ReportsPage() {
         bazar,
         utilities,
         deposits,
-        [],
-        [],
+        credits,
+        payments,
         staff,
         rooms,
       ),
-    [ym, members, meals, bazar, utilities, deposits, staff, rooms],
+    [ym, members, meals, bazar, utilities, deposits, credits, payments, staff, rooms],
   );
 
   const exportPDF = () => {

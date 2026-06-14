@@ -955,22 +955,15 @@ export function computeMonthlySummary(
 
   const settlementSummary = getSettlementSummary(settlements);
 
-  const perMember: PerMemberSummary[] = activeMembers.map((m) => {
+    const perMember: PerMemberSummary[] = activeMembers.map((m) => {
     const settlement = settlements.find((s) => s.memberId === m.id)!;
 
-    const rentShare = getPerBedRent(m, rooms);
-
-    let myStaff = 0;
-    staff.filter((s) => s.status !== "inactive").forEach((s) => {
-      const serviceType = STAFF_SERVICE_MAP[s.role] || "other_services";
-      const subscribers = activeMembers.filter((mem) => isMemberSubscribedToService(mem, serviceType)).length || 1;
-      if (isMemberSubscribedToService(m, serviceType)) {
-        myStaff += (s.salary || 0) / subscribers;
-      }
-    });
-
+    // Use values directly from settlement to ensure consistency (single source of truth)
     const previousDue = m.previousDue || 0;
-    const totalDue = settlement.mealCost + settlement.charges.expenseShares + rentShare + myStaff + previousDue;
+
+    // totalDue = gross charges for this month ONLY (before carry-forward adjustments)
+    // This is what the member owes for current month before previous deposit/credit offset
+    const totalDue = settlement.mealCost + settlement.charges.expenseShares + settlement.charges.rentShare + settlement.charges.staffShare + previousDue;
 
     return {
       memberId: m.id,
@@ -978,8 +971,8 @@ export function computeMonthlySummary(
       meals: settlement.totalMeals,
       mealCost: settlement.mealCost,
       utilityShare: settlement.charges.expenseShares,
-      rentShare,
-      staffShare: myStaff,
+      rentShare: settlement.charges.rentShare,
+      staffShare: settlement.charges.staffShare,
       previousDue,
       previousDeposit: settlement.charges.previousDeposit,
       previousCredit: settlement.charges.previousCredit,
@@ -1019,7 +1012,10 @@ export function computeMonthlySummary(
     totalDeposits,
     totalCredits,
     totalPayments,
-    cashBalance: totalDeposits + totalCredits + totalPayments - totalExpense,
+    // Cash Balance = Money Received (deposits + payments) - Money Spent (expenses)
+    // Note: Credits here are manually-created credit records from Firebase (not auto-computed settlement credits)
+    // They represent advances given TO members, which reduce cash
+    cashBalance: totalDeposits + totalPayments - totalCredits - totalExpense,
     vacantBeds,
     occupiedBeds,
     perMember,
