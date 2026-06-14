@@ -35,6 +35,7 @@ import type {
   ExpenseAllocation,
   ExpenseCategory,
 } from "@/lib/types";
+import { EXPENSE_CATEGORY_LABELS } from "@/lib/types";
 
 // ============================================================================
 // Core Types
@@ -62,9 +63,11 @@ export interface MemberMealInfo {
 export interface MemberContributions {
   // Bazar paid by this member
   bazarContribution: number;
+  bazarEntries: { buyer: string; amount: number }[];
   // Expense/Utility payments made by member on behalf of mess (electricity, internet, etc.)
   expenseContributions: number;
   expenseBreakdown: Record<string, number>;
+  expenseEntries: { category: string; paidBy: string; amount: number }[];
   // Payments made directly to mess (these ARE contributions)
   // Includes ALL payments - rent, meals, utilities, etc.
   paymentsMade: number;
@@ -335,20 +338,26 @@ function buildCreditReason(
 
   // Meal shortfall
   const mealShortfall = charges.mealCost - contributions.bazarContribution - contributions.mealPaid;
-  if (mealShortfall > 0.01) {
-    reasons.push(`Meals: ${bdt(mealShortfall)} short (cost ${bdt(charges.mealCost)}, bazar ${bdt(contributions.bazarContribution)}, paid ${bdt(contributions.mealPaid)})`);
+  if (mealShortfall > 0.01 && contributions.bazarEntries.length > 0) {
+    const bazarNames = contributions.bazarEntries.map((e) => `${e.buyer}(${bdt(e.amount)})`).join(", ");
+    reasons.push(`Meals: ${bdt(mealShortfall)} short · bazar paid by [${bazarNames}]`);
+  } else if (mealShortfall > 0.01) {
+    reasons.push(`Meals: ${bdt(mealShortfall)} short`);
   }
 
   // Rent shortfall
   const rentShortfall = charges.rentShare - contributions.rentPaid;
   if (rentShortfall > 0.01) {
-    reasons.push(`Rent: ${bdt(rentShortfall)} short (share ${bdt(charges.rentShare)}, paid ${bdt(contributions.rentPaid)})`);
+    reasons.push(`Rent: ${bdt(rentShortfall)} short`);
   }
 
   // Utility/expense shortfall
   const utilityShortfall = charges.expenseShares - contributions.expenseContributions - contributions.utilityPaid;
-  if (utilityShortfall > 0.01) {
-    reasons.push(`Utilities: ${bdt(utilityShortfall)} short (share ${bdt(charges.expenseShares)}, bills paid ${bdt(contributions.expenseContributions)}, payments ${bdt(contributions.utilityPaid)})`);
+  if (utilityShortfall > 0.01 && contributions.expenseEntries.length > 0) {
+    const expNames = contributions.expenseEntries.map((e) => `${e.paidBy}((${EXPENSE_CATEGORY_LABELS[e.category as keyof typeof EXPENSE_CATEGORY_LABELS] || e.category}) ৳${bdt(e.amount)})`).join(", ");
+    reasons.push(`Utilities: ${bdt(utilityShortfall)} short · bills paid by [${expNames}]`);
+  } else if (utilityShortfall > 0.01) {
+    reasons.push(`Utilities: ${bdt(utilityShortfall)} short`);
   }
 
   // Staff shortfall
@@ -481,16 +490,24 @@ export function getPreviousMonthBalances(
  */
 export function calculateMemberContributions(
   memberId: string,
-  _memberName: string,
+  memberName: string,
   monthBazar: Bazar[],
   monthExpenses: Expense[],
   monthPayments: Payment[],
 ): MemberContributions {
   // 1. Bazar contributions (money the member spent on bazar)
+  const bazarEntries: { buyer: string; amount: number }[] = [];
   const bazarContribution = getMemberBazarPaid(memberId, monthBazar);
+  monthBazar.forEach((b) => {
+    if (b.buyerId === memberId) {
+      const buyerLabel = b.buyerName || memberName;
+      bazarEntries.push({ buyer: buyerLabel, amount: b.total || 0 });
+    }
+  });
 
   // 2. Expense contributions - when a member pays an expense bill on behalf of the mess
   const expenseBreakdown: Record<string, number> = {};
+  const expenseEntries: { category: string; paidBy: string; amount: number }[] = [];
   let expenseContributions = 0;
 
   monthExpenses.forEach((expense) => {
@@ -498,6 +515,8 @@ export function calculateMemberContributions(
       const cat = expense.category;
       expenseBreakdown[cat] = (expenseBreakdown[cat] || 0) + (expense.amount || 0);
       expenseContributions += expense.amount || 0;
+      const payerLabel = expense.paidByName || memberName;
+      expenseEntries.push({ category: cat, paidBy: payerLabel, amount: expense.amount || 0 });
     }
   });
 
@@ -532,8 +551,10 @@ export function calculateMemberContributions(
 
   return {
     bazarContribution,
+    bazarEntries,
     expenseContributions,
     expenseBreakdown,
+    expenseEntries,
     paymentsMade,
     rentPaid,
     mealPaid,

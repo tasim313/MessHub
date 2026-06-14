@@ -2,8 +2,14 @@
  * Duplicate Prevention Utilities
  * Ensures idempotent operations and prevents duplicate record creation
  */
-import { doc, getDoc, query, where, getDocs, collection } from "firebase/firestore";
+import { doc, getDoc, query, where, getDocs, collection, deleteDoc, orderBy } from "firebase/firestore";
 import { db } from "./firebase";
+
+const CHARGE_TRANSACTION_TYPES = ["meal_charge", "rent_charge", "utility_charge", "staff_charge", "other_charge"];
+
+function isChargeType(transactionType: string): boolean {
+  return CHARGE_TRANSACTION_TYPES.includes(transactionType);
+}
 
 /**
  * Check if a rent charge already exists for a member in a given month
@@ -16,17 +22,80 @@ export async function checkRentChargeExists(memberId: string, month: string): Pr
 }
 
 /**
- * Check if a meal entry already exists for a member on a given date
- * Returns true if duplicate exists
+ * Check if a ledger charge entry already exists for a member in a given month and category.
+ * Uses a simple memberId-only query to avoid composite index requirements,
+ * then filters client-side by month, transactionType, and category.
  */
-export async function checkMealEntryExists(memberId: string, date: string): Promise<boolean> {
+export async function checkLedgerChargeExists(memberId: string, month: string, category: string): Promise<boolean> {
   const q = query(
-    collection(db, "meals"),
+    collection(db, "ledgers"),
     where("memberId", "==", memberId),
-    where("date", "==", date)
   );
   const snap = await getDocs(q);
-  return !snap.empty;
+  return snap.docs.some(d => {
+    const data = d.data();
+    return data.ym === month && isChargeType(data.transactionType) && data.category === category;
+  });
+}
+
+/**
+ * Find duplicate charge entries for a member in a given month and category.
+ * Returns the IDs of extra entries (keeping the first one by createdAt, marking others as duplicates).
+ */
+export async function findDuplicateLedgerCharges(memberId: string, month: string, category: string): Promise<string[]> {
+  const q = query(
+    collection(db, "ledgers"),
+    where("memberId", "==", memberId),
+  );
+  const snap = await getDocs(q);
+  const matches = snap.docs
+    .filter(d => {
+      const data = d.data();
+      return data.ym === month && isChargeType(data.transactionType) && data.category === category;
+    })
+    .sort((a, b) => ((a.data().createdAt || 0) - (b.data().createdAt || 0)));
+  const docIds = matches.map(d => d.id);
+  if (docIds.length <= 1) return [];
+  return docIds.slice(1);
+}
+
+/**
+ * Delete duplicate charge entries for a member in a given month and category.
+ * Keeps the oldest entry (by createdAt) and deletes the rest.
+ */
+export async function deleteDuplicateCharges(memberId: string, month: string, category: string): Promise<number> {
+  const duplicateIds = await findDuplicateLedgerCharges(memberId, month, category);
+  const deletePromises = duplicateIds.map(id => deleteDoc(doc(db, "ledgers", id)));
+  await Promise.all(deletePromises);
+  return duplicateIds.length;
+}
+
+/**
+ * Get the unique existing ledger charge for a member/month/category.
+ * If multiple entries exist, deletes extras and returns the first one's id and amount.
+ * Returns null if no entry exists.
+ */
+export async function getUniqueLedgerCharge(
+  memberId: string,
+  month: string,
+  category: string,
+): Promise<{ id: string; amount: number } | null> {
+  const q = query(
+    collection(db, "ledgers"),
+    where("memberId", "==", memberId),
+  );
+  const snap = await getDocs(q);
+  const matches = snap.docs
+    .filter(d => {
+      const data = d.data();
+      return data.ym === month && isChargeType(data.transactionType) && data.category === category;
+    })
+    .sort((a, b) => ((a.data().createdAt || 0) - (b.data().createdAt || 0)));
+  if (matches.length === 0) return null;
+  for (let i = 1; i < matches.length; i++) {
+    await deleteDoc(doc(db, "ledgers", matches[i].id));
+  }
+  return { id: matches[0].id, amount: (matches[0].data() as { amount?: number }).amount || 0 };
 }
 
 /**
@@ -186,22 +255,6 @@ export function generateUtilityAllocationId(utilityId: string, memberId: string)
  */
 export function generateStaffAllocationId(staffId: string, memberId: string, month: string): string {
   return `${staffId}_${memberId}_${month}`;
-}
-
-/**
- * Check if a ledger charge entry already exists for a member in a given month and category
- * Returns true if duplicate exists
- */
-export async function checkLedgerChargeExists(memberId: string, month: string, category: string): Promise<boolean> {
-  const q = query(
-    collection(db, "ledgers"),
-    where("memberId", "==", memberId),
-    where("ym", "==", month),
-    where("transactionType", "==", "charge"),
-    where("category", "==", category)
-  );
-  const snap = await getDocs(q);
-  return !snap.empty;
 }
 
 /**

@@ -583,6 +583,12 @@ export interface LedgerEntry {
   createdBy?: string;
   createdAt?: number;
   balance?: number;
+  /** Payment tracking: how much of this charge has been paid */
+  paidAmount?: number;
+  /** Payment tracking: status of this charge entry */
+  chargeStatus?: "pending" | "paid" | "partial";
+  /** Reference to the payment that cleared this charge */
+  paymentReferenceId?: string;
 }
 
 export interface Report {

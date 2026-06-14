@@ -270,7 +270,7 @@ function CreditsPage() {
                         <td className="p-3 text-right tabular-nums text-destructive">{bdt(s.charges.totalCharges)}</td>
                         <td className="p-3 text-right tabular-nums text-primary">{bdt(s.contributions.totalContribution)}</td>
                         <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(Math.abs(s.balance))}</td>
-                        <td className="p-3 text-xs text-muted-foreground max-w-[200px] truncate" title={reason}>{reason}</td>
+                        <td className="p-3 text-xs text-muted-foreground whitespace-normal break-words">{reason}</td>
                       </tr>
                     );
                   })}

@@ -26,7 +26,8 @@ import { MonthPicker } from "@/components/ui/month-picker";
 import {
   Receipt, DollarSign, Users, Building2, Trash2, Loader2, ArrowUpDown,
   UserRound, BedDouble, CreditCard, PiggyBank, BadgePercent,
-  Search, Filter, X,
+  Search, Filter, X, CheckCircle2, CircleDot, AlertCircle,
+  ChevronDown, ChevronUp, WalletIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
@@ -34,7 +35,7 @@ import type { Deposit, Credit, Payment, Expense, ServiceType, MonthlyClosing, Ex
 import { EXPENSE_CATEGORY_LABELS } from "@/lib/types";
 import { calculateMemberSettlement } from "@/lib/calculations/engine";
 import { isMemberSubscribedToService, getPerBedRent } from "@/lib/calc";
-import { checkLedgerChargeExists } from "@/lib/duplicate-check";
+import { checkLedgerChargeExists, deleteDuplicateCharges } from "@/lib/duplicate-check";
 
 export const Route = createFileRoute("/_authed/charges")({
   component: ChargesPage,
@@ -58,11 +59,38 @@ const monthOptions = [
   { value: "11", label: "November" }, { value: "12", label: "December" },
 ];
 
+/**
+ * Human-readable labels for charge transaction types
+ */
+const CHARGE_TYPE_LABELS: Record<string, string> = {
+  meal_charge: "Meal Cost",
+  rent_charge: "Rent",
+  utility_charge: "Shared Expense",
+  staff_charge: "Staff Salary",
+  other_charge: "Other Charge",
+};
+
+/** Charge types that should be displayed as individual charge rows */
+const CHARGE_TRANSACTION_TYPES = ["meal_charge", "rent_charge", "utility_charge", "staff_charge", "other_charge"];
+
+function getChargeTypeFromCategory(category: string): string {
+  if (category === "meal") return "meal_charge";
+  if (category === "rent") return "rent_charge";
+  if (category === "staff") return "staff_charge";
+  if (["internet", "electricity", "gas", "water", "generator", "maintenance",
+       "cleaner_salary", "security_salary", "garbage", "wifi", "kitchen",
+       "furniture", "appliance", "other_expense"].includes(category)) {
+    return "utility_charge";
+  }
+  return "other_charge";
+}
+
 function ChargesPage() {
   const { profile } = useAuth();
   const [ym, setYm] = useState(ymKey());
   const [selectedMember, setSelectedMember] = useState<string>("");
   const [saving, setSaving] = useState(false);
+  const [showPaidCharges, setShowPaidCharges] = useState(false);
 
   const now = new Date();
   const currentYear = now.getFullYear();
@@ -123,6 +151,73 @@ function ChargesPage() {
     return currentMember.services.filter((s) => s.enabled).map((s) => s.type);
   }, [currentMember]);
 
+  /**
+   * INDIVIDUAL CHARGES: Get all charge entries from the ledger for the selected member and month.
+   * Each charge is displayed as its own row (not combined).
+   * Paid charges are soft-deleted (hidden) by default.
+   */
+  const memberCharges = useMemo(() => {
+    if (!selectedMember) return [];
+
+    return ledgers
+      .filter((e) => {
+        // Must be a charge type and belong to this member+month
+        if (e.memberId !== selectedMember) return false;
+        if (e.ym !== ym) return false;
+        return CHARGE_TRANSACTION_TYPES.includes(e.transactionType);
+      })
+      .map((entry) => {
+        // Determine if this charge is paid
+        const chargeStatus = entry.chargeStatus || "pending";
+        const paidAmount = entry.paidAmount || 0;
+        const isPaid = chargeStatus === "paid" || (paidAmount >= entry.amount);
+        const isPartial = chargeStatus === "partial" || (paidAmount > 0 && paidAmount < entry.amount);
+
+        // Get a human-readable label for this charge
+        const chargeLabel = getChargeLabel(entry);
+        const amount = entry.amount || 0;
+        const due = isPaid ? 0 : isPartial ? amount - paidAmount : amount;
+
+        return {
+          ...entry,
+          chargeLabel,
+          chargeStatus: isPaid ? "paid" as const : isPartial ? "partial" as const : "pending" as const,
+          paidAmount,
+          dueAmount: due,
+        };
+      })
+      .sort((a, b) => {
+        // Sort: pending first, then partial, then paid
+        const statusOrder = { pending: 0, partial: 1, paid: 2 };
+        const aOrder = statusOrder[a.chargeStatus] ?? 0;
+        const bOrder = statusOrder[b.chargeStatus] ?? 0;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        // Then by date
+        return a.date.localeCompare(b.date);
+      });
+  }, [ledgers, selectedMember, ym]);
+
+  /** Charges that are not yet paid (active charges) */
+  const pendingCharges = useMemo(
+    () => memberCharges.filter((c) => c.chargeStatus !== "paid"),
+    [memberCharges]
+  );
+
+  /** Fully paid charges */
+  const paidCharges = useMemo(
+    () => memberCharges.filter((c) => c.chargeStatus === "paid"),
+    [memberCharges]
+  );
+
+  /**
+   * Get the total pending amount for this member.
+   * Used in settlement calculations.
+   */
+  const totalPendingChargeAmount = useMemo(
+    () => pendingCharges.reduce((sum, c) => sum + c.dueAmount, 0),
+    [pendingCharges]
+  );
+
   const prevMonthClosings = useMemo(() => {
     if (!currentMember || !closings.length) return [];
     const [year, month] = ym.split("-").map(Number);
@@ -151,33 +246,189 @@ function ChargesPage() {
     .filter((e) => e.memberId === selectedMember && e.ym === ym)
     .sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || 0) - (b.createdAt || 0));
 
-  const handleSaveToLedger = async () => {
+  /**
+    * Generate charges from current month's data and save them as individual ledger entries.
+    * Each charge type (meal, rent, utility, staff) gets its own entry.
+    */
+  const handleGenerateCharges = async () => {
     if (!currentMember || !profile || !memberSettlement) return;
     setSaving(true);
     try {
       const charges = memberSettlement.charges;
+      const cleanupResults: string[] = [];
+      const allCategories = [
+        ...(charges.mealCost > 0 ? [{ category: "meal", label: "meal" }] : []),
+        ...(charges.rentShare > 0 ? [{ category: "rent", label: "rent" }] : []),
+        ...Object.keys(charges.expenseShareBreakdown).filter(c => charges.expenseShareBreakdown[c] > 0).map(c => ({ category: c, label: c })),
+        ...(charges.staffShare > 0 ? [{ category: "staff", label: "staff" }] : []),
+      ];
+      for (const { category } of allCategories) {
+        const deleted = await deleteDuplicateCharges(currentMember.id, ym, category);
+        if (deleted > 0) cleanupResults.push(`${EXPENSE_CATEGORY_LABELS[category as keyof typeof EXPENSE_CATEGORY_LABELS] || category}: removed ${deleted} duplicate${deleted > 1 ? "s" : ""}`);
+      }
+      if (cleanupResults.length > 0) toast.info(cleanupResults.join(", "), { duration: 4000 });
       const results: string[] = [];
+      const now = Date.now();
+
+      // Meal charge
       if (charges.mealCost > 0) {
         const exists = await checkLedgerChargeExists(currentMember.id, ym, "meal");
-        if (!exists) { await addDocTo("ledgers", { memberId: currentMember.id, memberName: currentMember.name, date: ym + "-01", ym, transactionType: "meal_charge", category: "meal", amount: charges.mealCost, notes: `Meal cost for ${ym} (${memberSettlement.totalMeals} meals × ${bdt(memberSettlement.mealRate)})` }); results.push("Meal charge saved"); }
+        if (!exists) {
+          const mealNotes = `Meal cost for ${ym} (${memberSettlement.totalMeals} meals × ${bdt(memberSettlement.mealRate)})`;
+          await addDocTo("ledgers", {
+            memberId: currentMember.id,
+            memberName: currentMember.name,
+            date: ym + "-01",
+            ym,
+            transactionType: "meal_charge",
+            category: "meal",
+            amount: charges.mealCost,
+            notes: mealNotes,
+            chargeStatus: "pending",
+            paidAmount: 0,
+            createdAt: now,
+          });
+          results.push("Meal charge saved");
+        }
       }
+
+      // Rent charge
       if (charges.rentShare > 0) {
         const exists = await checkLedgerChargeExists(currentMember.id, ym, "rent");
-        if (!exists) { await addDocTo("ledgers", { memberId: currentMember.id, memberName: currentMember.name, date: ym + "-01", ym, transactionType: "rent_charge", category: "rent", amount: charges.rentShare, notes: `Rent share for ${ym}` }); results.push("Rent charge saved"); }
+        if (!exists) {
+          await addDocTo("ledgers", {
+            memberId: currentMember.id,
+            memberName: currentMember.name,
+            date: ym + "-01",
+            ym,
+            transactionType: "rent_charge",
+            category: "rent",
+            amount: charges.rentShare,
+            notes: `Rent share for ${ym}`,
+            chargeStatus: "pending",
+            paidAmount: 0,
+            createdAt: now,
+          });
+          results.push("Rent charge saved");
+        }
       }
+
+      // Individual expense/utility charges
       for (const [category, amount] of Object.entries(charges.expenseShareBreakdown)) {
         if (amount > 0) {
           const exists = await checkLedgerChargeExists(currentMember.id, ym, category);
-          if (!exists) { await addDocTo("ledgers", { memberId: currentMember.id, memberName: currentMember.name, date: ym + "-01", ym, transactionType: "utility_charge", category: category as any, amount, notes: `${EXPENSE_CATEGORY_LABELS[category as keyof typeof EXPENSE_CATEGORY_LABELS] || category} for ${ym}` }); results.push(`${category} charge saved`); }
+          if (!exists) {
+            const catLabel = EXPENSE_CATEGORY_LABELS[category as keyof typeof EXPENSE_CATEGORY_LABELS] || category;
+            await addDocTo("ledgers", {
+              memberId: currentMember.id,
+              memberName: currentMember.name,
+              date: ym + "-01",
+              ym,
+              transactionType: "utility_charge",
+              category: category as any,
+              amount,
+              notes: `${catLabel} for ${ym}`,
+              chargeStatus: "pending",
+              paidAmount: 0,
+              createdAt: now,
+            });
+            results.push(`${catLabel} charge saved`);
+          }
         }
       }
+
+      // Staff charge
       if (charges.staffShare > 0) {
         const exists = await checkLedgerChargeExists(currentMember.id, ym, "staff");
-        if (!exists) { await addDocTo("ledgers", { memberId: currentMember.id, memberName: currentMember.name, date: ym + "-01", ym, transactionType: "staff_charge", category: "staff", amount: charges.staffShare, notes: `Staff share for ${ym}` }); results.push("Staff charge saved"); }
+        if (!exists) {
+          await addDocTo("ledgers", {
+            memberId: currentMember.id,
+            memberName: currentMember.name,
+            date: ym + "-01",
+            ym,
+            transactionType: "staff_charge",
+            category: "staff",
+            amount: charges.staffShare,
+            notes: `Staff salary share for ${ym}`,
+            chargeStatus: "pending",
+            paidAmount: 0,
+            createdAt: now,
+          });
+          results.push("Staff charge saved");
+        }
       }
-      toast.success(results.length > 0 ? results.join(", ") : "All charges already in ledger");
-    } catch (err) { toast.error((err as Error).message); }
-    finally { setSaving(false); }
+
+      // Previous due/credit/deposit as notes
+      if (charges.previousDue > 0) {
+        // This is already tracked in the member profile, no need to create a ledger entry
+        results.push(`Previous due: ${bdt(charges.previousDue)}`);
+      }
+      if (charges.previousCredit > 0 && charges.previousCredit > 0.01) {
+        results.push(`Previous credit carried: ${bdt(charges.previousCredit)}`);
+      }
+      if (charges.previousDeposit > 0 && charges.previousDeposit > 0.01) {
+        results.push(`Previous deposit carried: ${bdt(charges.previousDeposit)}`);
+      }
+
+      toast.success(results.length > 0 ? results.join(", ") : "All charges already generated");
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /**
+   * Mark a specific charge as paid by linking it to a payment.
+   * This soft-deletes the charge from the active view.
+   */
+  const handlePayCharge = async (chargeEntry: any) => {
+    if (!currentMember || !profile) return;
+    const amount = chargeEntry.dueAmount || chargeEntry.amount;
+    try {
+      const date = new Date().toISOString().slice(0, 10);
+      const paymentNotes = `Payment for ${chargeEntry.chargeLabel}`;
+
+      // Record the payment
+      const paymentRef = await addDocTo("payments", {
+        memberId: currentMember.id,
+        memberName: currentMember.name,
+        amount,
+        method: "Cash",
+        date,
+        ym,
+        status: "paid",
+        category: chargeEntry.category,
+        notes: paymentNotes,
+        createdAt: Date.now(),
+      });
+
+      // Update the charge entry as paid
+      await updateDocIn("ledgers", chargeEntry.id, {
+        chargeStatus: "paid",
+        paidAmount: amount,
+        paymentReferenceId: paymentRef.id,
+      });
+
+      // Record in ledger as payment
+      await addDocTo("ledgers", {
+        memberId: currentMember.id,
+        memberName: currentMember.name,
+        date,
+        ym,
+        transactionType: "payment",
+        category: chargeEntry.category,
+        amount,
+        notes: paymentNotes,
+        referenceId: paymentRef,
+        referenceType: "payment",
+        createdAt: Date.now(),
+      });
+
+      toast.success(`${chargeEntry.chargeLabel}: ${bdt(amount)} paid`);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
   };
 
   const handleRecordPayment = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -188,48 +439,224 @@ function ChargesPage() {
     const method = (form.elements.namedItem("method") as HTMLSelectElement).value;
     const date = (form.elements.namedItem("date") as HTMLInputElement).value;
     const category = (form.elements.namedItem("category") as HTMLSelectElement).value;
-    const referenceId = (form.elements.namedItem("referenceId") as HTMLInputElement).value || undefined;
+    const targetChargeId = (form.elements.namedItem("targetCharge") as HTMLSelectElement).value;
     const notes = (form.elements.namedItem("notes") as HTMLTextAreaElement).value;
     if (!amount || amount <= 0) return toast.error("Enter amount");
     try {
-      const categoryLabel = EXPENSE_CATEGORY_LABELS[category as keyof typeof EXPENSE_CATEGORY_LABELS] || category;
-      const referencedExpense = referenceId ? monthExpenses.find((ex) => ex.id === referenceId) : null;
-      const expenseYm = referencedExpense ? referencedExpense.ym : date.slice(0, 7);
-      const expenseDate = referencedExpense ? referencedExpense.date : date;
-      await addDocTo("payments", { memberId: currentMember.id, memberName: currentMember.name, amount, method, date: expenseDate, ym: expenseYm, status: "paid", category, referenceId: referenceId || undefined, referenceType: referenceId ? "expense" : undefined, notes: notes || `Payment for ${categoryLabel} via ${method}` });
-      await addDocTo("ledgers", { memberId: currentMember.id, memberName: currentMember.name, date: expenseDate, ym: expenseYm, transactionType: "payment", category, amount, referenceId: referenceId || undefined, notes: notes || `Payment for ${categoryLabel} via ${method}` });
-      toast.success(`Payment recorded`); form.reset();
-    } catch (err) { toast.error((err as Error).message); }
+      // If a specific charge is targeted, pay that charge
+      if (targetChargeId && targetChargeId !== "__all__") {
+        const charge = memberCharges.find((c) => c.id === targetChargeId);
+        if (charge) {
+          const paymentNotes = notes || `Payment for ${charge.chargeLabel} via ${method}`;
+          const paymentRef = await addDocTo("payments", {
+            memberId: currentMember.id,
+            memberName: currentMember.name,
+            amount,
+            method,
+            date,
+            ym,
+            status: "paid",
+            category: charge.category,
+            notes: paymentNotes,
+            createdAt: Date.now(),
+          });
+
+          // Mark the charge as paid
+          const newPaidAmount = (charge.paidAmount || 0) + amount;
+          const newStatus = newPaidAmount >= charge.amount ? "paid" : "partial";
+          await updateDocIn("ledgers", charge.id, {
+            chargeStatus: newStatus,
+            paidAmount: newPaidAmount,
+            paymentReferenceId: paymentRef.id,
+          });
+
+          // Record in ledger
+          await addDocTo("ledgers", {
+            memberId: currentMember.id,
+            memberName: currentMember.name,
+            date,
+            ym,
+            transactionType: "payment",
+            category: charge.category,
+            amount,
+            notes: paymentNotes,
+            referenceId: paymentRef,
+            referenceType: "payment",
+            createdAt: Date.now(),
+          });
+
+          toast.success(`Payment recorded for ${charge.chargeLabel}`);
+        }
+      } else {
+        // General payment (not linked to a specific charge)
+        const paymentNotes = notes || `Payment via ${method}`;
+        const paymentRef = await addDocTo("payments", {
+          memberId: currentMember.id,
+          memberName: currentMember.name,
+          amount,
+          method,
+          date,
+          ym,
+          status: "paid",
+          category,
+          notes: paymentNotes,
+          createdAt: Date.now(),
+        });
+
+        // Try to auto-allocate payment to pending charges (FIFO)
+        let remainingAmount = amount;
+        for (const charge of pendingCharges) {
+          if (remainingAmount <= 0) break;
+          const dueAmount = charge.dueAmount;
+          const payAmount = Math.min(remainingAmount, dueAmount);
+          if (payAmount > 0) {
+            const newPaidAmount = (charge.paidAmount || 0) + payAmount;
+            const newStatus = newPaidAmount >= charge.amount ? "paid" : "partial";
+            await updateDocIn("ledgers", charge.id, {
+              chargeStatus: newStatus,
+              paidAmount: newPaidAmount,
+              paymentReferenceId: paymentRef.id,
+            });
+            remainingAmount -= payAmount;
+          }
+        }
+
+        // Record in ledger
+        await addDocTo("ledgers", {
+          memberId: currentMember.id,
+          memberName: currentMember.name,
+          date,
+          ym,
+          transactionType: "payment",
+          category,
+          amount,
+          notes: paymentNotes,
+          referenceId: paymentRef,
+          referenceType: "payment",
+          createdAt: Date.now(),
+        });
+
+        toast.success(`Payment recorded${remainingAmount < amount ? ` (${bdt(remainingAmount)} excess)` : ""}`);
+      }
+      form.reset();
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
   };
 
-  const handleQuickPayment = async (amount: number, notes: string, category: string) => {
+  const handleQuickPayment = async (amount: number, notes: string, category: string, chargeId?: string) => {
     if (!currentMember || !profile || !amount || amount <= 0) return;
     try {
       const date = new Date().toISOString().slice(0, 10);
-      const ym = date.slice(0, 7);
-      await addDocTo("payments", { memberId: currentMember.id, memberName: currentMember.name, amount, method: "Cash", date, ym, status: "paid", category, notes: `${notes} (${category})` });
-      await addDocTo("ledgers", { memberId: currentMember.id, memberName: currentMember.name, date, ym, transactionType: "payment", category: category as any, amount, notes });
+
+      // Record payment
+      const paymentRef = await addDocTo("payments", {
+        memberId: currentMember.id,
+        memberName: currentMember.name,
+        amount,
+        method: "Cash",
+        date,
+        ym,
+        status: "paid",
+        category,
+        notes,
+        createdAt: Date.now(),
+      });
+
+      // If linked to a specific charge, mark it
+      if (chargeId) {
+        const charge = memberCharges.find((c) => c.id === chargeId);
+        if (charge) {
+          const newPaidAmount = (charge.paidAmount || 0) + amount;
+          const newStatus = newPaidAmount >= charge.amount ? "paid" : "partial";
+          await updateDocIn("ledgers", charge.id, {
+            chargeStatus: newStatus,
+            paidAmount: newPaidAmount,
+            paymentReferenceId: paymentRef.id,
+          });
+        }
+      } else {
+        // Try to auto-allocate to pending charges
+        let remainingAmount = amount;
+        for (const charge of pendingCharges) {
+          if (remainingAmount <= 0) break;
+          const payAmount = Math.min(remainingAmount, charge.dueAmount);
+          if (payAmount > 0) {
+            const newPaidAmount = (charge.paidAmount || 0) + payAmount;
+            const newStatus = newPaidAmount >= charge.amount ? "paid" : "partial";
+            await updateDocIn("ledgers", charge.id, {
+              chargeStatus: newStatus,
+              paidAmount: newPaidAmount,
+              paymentReferenceId: paymentRef.id,
+            });
+            remainingAmount -= payAmount;
+          }
+        }
+      }
+
+      // Record in ledger
+      await addDocTo("ledgers", {
+        memberId: currentMember.id,
+        memberName: currentMember.name,
+        date,
+        ym,
+        transactionType: "payment",
+        category: category as any,
+        amount,
+        notes,
+        referenceId: paymentRef,
+        referenceType: "payment",
+        createdAt: Date.now(),
+      });
+
       toast.success(`${notes}: ${bdt(amount)} recorded`);
-    } catch (err) { toast.error((err as Error).message); }
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
   };
 
   const handleDeleteTransaction = async (entry: LedgerEntry) => {
     if (!profile || !confirm("Delete?")) return;
     try {
-      if (profile.role === "owner") { await deleteDocFrom("ledgers", entry.id); toast.success("Deleted"); }
-      else { await submitChangeRequest({ collectionName: "ledgers", action: "delete", title: `Delete transaction`, actor: { uid: profile.uid, name: profile.name, role: profile.role }, targetId: entry.id, previousData: entry }); }
-    } catch (err) { toast.error((err as Error).message); }
+      if (profile.role === "owner") {
+        await deleteDocFrom("ledgers", entry.id);
+        toast.success("Deleted");
+      } else {
+        await submitChangeRequest({
+          collectionName: "ledgers",
+          action: "delete",
+          title: `Delete transaction`,
+          actor: { uid: profile.uid, name: profile.name, role: profile.role },
+          targetId: entry.id,
+          previousData: entry,
+        });
+      }
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
   };
 
   const getStatusBadge = (status: string) => {
-    switch (status) { case "pay": return "bg-destructive/10 text-destructive"; case "receive": return "bg-primary/10 text-primary"; default: return "bg-muted text-muted-foreground"; }
+    switch (status) {
+      case "pay": return "bg-destructive/10 text-destructive";
+      case "receive": return "bg-primary/10 text-primary";
+      default: return "bg-muted text-muted-foreground";
+    }
+  };
+
+  const getChargeStatusBadge = (status: string) => {
+    switch (status) {
+      case "paid": return { icon: CheckCircle2, className: "bg-green-500/10 text-green-600 border-green-500/20", label: "Paid" };
+      case "partial": return { icon: AlertCircle, className: "bg-amber-500/10 text-amber-600 border-amber-500/20", label: "Partial" };
+      default: return { icon: CircleDot, className: "bg-destructive/10 text-destructive border-destructive/20", label: "Unpaid" };
+    }
   };
 
   return (
     <div>
       <PageHeader
         title="Member Charges"
-        description="Settlement preview with auto-calculated deposit and credit"
+        description="Individual charge tracking with payment status"
       />
       <div className="p-6 space-y-6">
         {/* FILTERS BAR */}
@@ -296,116 +723,360 @@ function ChargesPage() {
               </div>
             </Card>
 
-            {/* CHARGES */}
-            <Card className="p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-lg flex items-center gap-2"><ArrowUpDown className="h-5 w-5" />Member Charges</h3>
-                <Button size="sm" onClick={handleSaveToLedger} disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save to Ledger"}</Button>
+            {/* ──────────────────────────────────────────── */}
+            {/* INDIVIDUAL CHARGES TABLE */}
+            {/* ──────────────────────────────────────────── */}
+            <Card className="overflow-hidden">
+              <div className="p-4 border-b bg-muted/30 flex items-center justify-between">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <Receipt className="h-4 w-4" />
+                  Individual Charges
+                  <span className="text-muted-foreground font-normal ml-1">
+                    ({memberCharges.length} total · {pendingCharges.length} pending)
+                  </span>
+                </h3>
+                <div className="flex items-center gap-2">
+                  {paidCharges.length > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={() => setShowPaidCharges(!showPaidCharges)}
+                    >
+                      {showPaidCharges ? <ChevronUp className="h-3.5 w-3.5 mr-1" /> : <ChevronDown className="h-3.5 w-3.5 mr-1" />}
+                      {showPaidCharges ? "Hide Paid" : `Show Paid (${paidCharges.length})`}
+                    </Button>
+                  )}
+                  <Button size="sm" onClick={handleGenerateCharges} disabled={saving}>
+                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Generate Charges"}
+                  </Button>
+                </div>
               </div>
-              <div className="space-y-3">
-                {memberSettlement.charges.mealCost > 0 && <div className="flex justify-between items-center p-3 bg-muted rounded-lg"><span className="font-medium">Meals <span className="text-xs text-muted-foreground ml-2">({memberSettlement.totalMeals} meals × {bdt(memberSettlement.mealRate)})</span></span><span className="font-semibold">{bdt(memberSettlement.charges.mealCost)}</span></div>}
-                {memberSettlement.charges.rentShare > 0 && <div className="flex justify-between items-center p-3 bg-muted rounded-lg"><span className="font-medium">Rent</span><span className="font-semibold">{bdt(memberSettlement.charges.rentShare)}</span></div>}
-                {Object.entries(memberSettlement.charges.expenseShareBreakdown).map(([cat, amount]) => <div key={cat} className="flex justify-between items-center p-3 bg-muted rounded-lg"><span className="font-medium">{EXPENSE_CATEGORY_LABELS[cat as keyof typeof EXPENSE_CATEGORY_LABELS] || cat}</span><span className="font-semibold">{bdt(amount)}</span></div>)}
-                {memberSettlement.charges.staffShare > 0 && <div className="flex justify-between items-center p-3 bg-muted rounded-lg"><span className="font-medium">Staff</span><span className="font-semibold">{bdt(memberSettlement.charges.staffShare)}</span></div>}
-                {memberSettlement.charges.previousDue > 0 && <div className="flex justify-between items-center p-3 bg-destructive/10 rounded-lg"><span className="font-medium">Other Charges</span><span className="font-semibold text-destructive">{bdt(memberSettlement.charges.previousDue)}</span></div>}
-                {memberSettlement.charges.previousCredit > 0 && <div className="flex justify-between items-center p-3 bg-amber-500/10 rounded-lg"><span className="font-medium">Previous Credit</span><span className="font-semibold text-amber-600">{bdt(memberSettlement.charges.previousCredit)}</span></div>}
-                {memberSettlement.charges.previousDeposit > 0 && <div className="flex justify-between items-center p-3 bg-green-500/10 rounded-lg"><span className="font-medium">Previous Deposit</span><span className="font-semibold text-green-600">-{bdt(memberSettlement.charges.previousDeposit)}</span></div>}
-                <div className="border-t pt-3 mt-3"><div className="flex justify-between items-center font-bold text-lg"><span>Total Charges</span><span className="text-destructive">{bdt(memberSettlement.charges.totalCharges)}</span></div></div>
-              </div>
+
+              {memberCharges.length === 0 ? (
+                <div className="p-12 text-center text-muted-foreground">
+                  <Receipt className="h-10 w-10 mx-auto opacity-40 mb-3" />
+                  <p className="font-medium">No charges generated for this period</p>
+                  <Button size="sm" variant="outline" onClick={handleGenerateCharges} disabled={saving} className="mt-3">
+                    Generate Charges Now
+                  </Button>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="text-xs uppercase text-muted-foreground bg-muted/50 sticky top-0">
+                      <tr>
+                        <th className="text-left p-3 font-medium">Date</th>
+                        <th className="text-left p-3 font-medium">Charge Type</th>
+                        <th className="text-left p-3 font-medium">Description</th>
+                        <th className="text-right p-3 font-medium">Amount</th>
+                        <th className="text-right p-3 font-medium">Paid</th>
+                        <th className="text-right p-3 font-medium">Due</th>
+                        <th className="text-center p-3 font-medium">Status</th>
+                        <th className="text-center p-3 font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {memberCharges
+                        .filter((c) => showPaidCharges || c.chargeStatus !== "paid")
+                        .map((charge) => {
+                          const statusInfo = getChargeStatusBadge(charge.chargeStatus);
+                          const StatusIcon = statusInfo.icon;
+                          return (
+                            <tr
+                              key={charge.id}
+                              className={`border-t hover:bg-muted/30 transition-colors ${
+                                charge.chargeStatus === "paid" ? "opacity-50" : ""
+                              }`}
+                            >
+                              <td className="p-3">{charge.date}</td>
+                              <td className="p-3">
+                                <span className="font-medium">{charge.chargeLabel}</span>
+                              </td>
+                              <td className="p-3 text-muted-foreground max-w-[250px]">
+                                <span className="whitespace-normal break-words">{charge.notes || "—"}</span>
+                              </td>
+                              <td className="p-3 text-right tabular-nums font-semibold">
+                                {bdt(charge.amount)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums text-primary">
+                                {charge.paidAmount > 0 ? bdt(charge.paidAmount) : "—"}
+                              </td>
+                              <td className="p-3 text-right tabular-nums font-semibold text-destructive">
+                                {charge.dueAmount > 0 ? bdt(charge.dueAmount) : "—"}
+                              </td>
+                              <td className="p-3 text-center">
+                                <Badge variant="outline" className={`text-xs gap-1 ${statusInfo.className}`}>
+                                  <StatusIcon className="h-3 w-3" />
+                                  {statusInfo.label}
+                                </Badge>
+                              </td>
+                              <td className="p-3 text-center">
+                                {charge.chargeStatus !== "paid" && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8 text-xs"
+                                    onClick={() => handlePayCharge(charge)}
+                                  >
+                                    Pay {bdt(charge.dueAmount)}
+                                  </Button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                    <tfoot className="font-semibold bg-muted/30">
+                      <tr className="border-t-2">
+                        <td className="p-3" colSpan={2}>Total</td>
+                        <td className="p-3"></td>
+                        <td className="p-3 text-right">
+                          {bdt(memberCharges.reduce((s, c) => s + c.amount, 0))}
+                        </td>
+                        <td className="p-3 text-right text-primary">
+                          {bdt(memberCharges.reduce((s, c) => s + (c.paidAmount || 0), 0))}
+                        </td>
+                        <td className="p-3 text-right text-destructive">
+                          {bdt(pendingCharges.reduce((s, c) => s + c.dueAmount, 0))}
+                        </td>
+                        <td className="p-3"></td>
+                        <td className="p-3"></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
             </Card>
 
-            {/* CONTRIBUTIONS */}
+            {/* SETTLEMENT SUMMARY */}
             <Card className="p-5">
-              <h3 className="font-semibold text-lg mb-4 flex items-center gap-2"><Users className="h-5 w-5" />Member Contributions</h3>
-              <div className="space-y-3">
-                {Object.entries(memberSettlement.contributions.expenseBreakdown).map(([cat, amount]) => <div key={cat} className="flex justify-between items-center p-3 bg-muted rounded-lg"><span className="font-medium">{EXPENSE_CATEGORY_LABELS[cat as keyof typeof EXPENSE_CATEGORY_LABELS] || cat} Paid</span><span className="font-semibold text-primary">{bdt(amount)}</span></div>)}
-                {memberSettlement.contributions.bazarContribution > 0 && <div className="flex justify-between items-center p-3 bg-muted rounded-lg"><span className="font-medium">Bazar Paid</span><span className="font-semibold">{bdt(memberSettlement.contributions.bazarContribution)}</span></div>}
-                {memberSettlement.contributions.rentPaid > 0 && <div className="flex justify-between items-center p-3 bg-muted rounded-lg"><span className="font-medium">Rent Paid</span><span className="font-semibold">{bdt(memberSettlement.contributions.rentPaid)}</span></div>}
-                {memberSettlement.contributions.expenseContributions > 0 && <div className="flex justify-between items-center p-3 bg-muted rounded-lg"><span className="font-medium">Utility Paid</span><span className="font-semibold">{bdt(memberSettlement.contributions.expenseContributions)}</span></div>}
-                {memberSettlement.contributions.paymentsMade > 0 && <div className="flex justify-between items-center p-3 bg-primary/5 rounded-lg"><span className="font-medium">Payments Made</span><span className="font-semibold text-primary">{bdt(memberSettlement.contributions.paymentsMade)}</span></div>}
-                <div className="border-t pt-3 mt-3"><div className="flex justify-between items-center font-bold text-lg"><span>Total Contributions</span><span className="text-primary">{bdt(memberSettlement.contributions.totalContribution)}</span></div></div>
-              </div>
-            </Card>
-
-            {/* SETTLEMENT */}
-            <Card className="p-5">
-              <h3 className="font-semibold text-lg mb-4 flex items-center gap-2"><DollarSign className="h-5 w-5" />Settlement Result</h3>
+              <h3 className="font-semibold text-lg mb-4 flex items-center gap-2"><DollarSign className="h-5 w-5" />Settlement Summary</h3>
               <div className="rounded-lg bg-muted p-4 space-y-3">
-                <div className="flex justify-between text-sm"><span>Total Charges</span><span className="font-semibold text-destructive">{bdt(memberSettlement.charges.totalCharges)}</span></div>
-                <div className="flex justify-between text-sm"><span>Total Contributions</span><span className="font-semibold text-primary">{bdt(memberSettlement.contributions.totalContribution)}</span></div>
-                <div className="border-t pt-3 flex justify-between font-bold text-lg"><span>Net Balance</span><span className={memberSettlement.balance >= 0 ? "text-primary" : "text-destructive"}>{memberSettlement.balance >= 0 ? "+" : ""}{bdt(memberSettlement.balance)}</span></div>
+                <div className="flex justify-between text-sm">
+                  <span>Total Charges (all types)</span>
+                  <span className="font-semibold text-destructive">{bdt(memberSettlement.charges.totalCharges)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>Total Contributions (bazar + payments + bills paid)</span>
+                  <span className="font-semibold text-primary">{bdt(memberSettlement.contributions.totalContribution)}</span>
+                </div>
+                <div className="border-t pt-3 flex justify-between font-bold text-lg">
+                  <span>Net Balance</span>
+                  <span className={memberSettlement.balance >= 0 ? "text-primary" : "text-destructive"}>
+                    {memberSettlement.balance >= 0 ? "+" : ""}{bdt(memberSettlement.balance)}
+                  </span>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3 mt-4">
-                <div className="rounded-lg border p-3 text-center"><div className="text-xs uppercase text-muted-foreground mb-1">Deposit</div><div className="text-lg font-bold text-primary">{memberSettlement.totalDeposit > 0 ? bdt(memberSettlement.totalDeposit) : "—"}</div></div>
-                <div className="rounded-lg border p-3 text-center"><div className="text-xs uppercase text-muted-foreground mb-1">Credit</div><div className="text-lg font-bold text-destructive">{memberSettlement.totalCredit > 0 ? bdt(memberSettlement.totalCredit) : "—"}</div></div>
-                <div className="rounded-lg border p-3 text-center"><div className="text-xs uppercase text-muted-foreground mb-1">Receivable</div><div className="text-lg font-bold text-primary">{memberSettlement.receivableAmount > 0 ? bdt(memberSettlement.receivableAmount) : "—"}</div></div>
-                <div className="rounded-lg border p-3 text-center"><div className="text-xs uppercase text-muted-foreground mb-1">Payable</div><div className="text-lg font-bold text-destructive">{memberSettlement.payableAmount > 0 ? bdt(memberSettlement.payableAmount) : "—"}</div></div>
+                <div className="rounded-lg border p-3 text-center">
+                  <div className="text-xs uppercase text-muted-foreground mb-1">Deposit (Mess owes member)</div>
+                  <div className="text-lg font-bold text-primary">{memberSettlement.totalDeposit > 0 ? bdt(memberSettlement.totalDeposit) : "—"}</div>
+                </div>
+                <div className="rounded-lg border p-3 text-center">
+                  <div className="text-xs uppercase text-muted-foreground mb-1">Credit (Member owes mess)</div>
+                  <div className="text-lg font-bold text-destructive">{memberSettlement.totalCredit > 0 ? bdt(memberSettlement.totalCredit) : "—"}</div>
+                </div>
               </div>
               <div className="mt-4 bg-background rounded-md p-3 text-center">
                 <Badge className={getStatusBadge(memberSettlement.settlementStatus) + " text-sm px-4 py-2"}>
                   {memberSettlement.settlementStatus === "pay" ? "Member Owes Mess" : memberSettlement.settlementStatus === "receive" ? "Mess Owes Member" : "Settled"}
                 </Badge>
               </div>
+
+              {/* Charge Breakdown */}
+              <div className="mt-4 space-y-2">
+                <h4 className="text-sm font-medium text-muted-foreground">Charge Breakdown</h4>
+                {memberSettlement.charges.mealCost > 0 && (
+                  <div className="flex justify-between items-center p-2 rounded bg-muted/50">
+                    <span className="text-sm">Meals <span className="text-xs text-muted-foreground">({memberSettlement.totalMeals} × {bdt(memberSettlement.mealRate)})</span></span>
+                    <span className="text-sm font-semibold">{bdt(memberSettlement.charges.mealCost)}</span>
+                  </div>
+                )}
+                {memberSettlement.charges.rentShare > 0 && (
+                  <div className="flex justify-between items-center p-2 rounded bg-muted/50">
+                    <span className="text-sm">Rent</span>
+                    <span className="text-sm font-semibold">{bdt(memberSettlement.charges.rentShare)}</span>
+                  </div>
+                )}
+                {Object.entries(memberSettlement.charges.expenseShareBreakdown).map(([cat, amount]) => (
+                  <div key={cat} className="flex justify-between items-center p-2 rounded bg-muted/50">
+                    <span className="text-sm">{EXPENSE_CATEGORY_LABELS[cat as keyof typeof EXPENSE_CATEGORY_LABELS] || cat}</span>
+                    <span className="text-sm font-semibold">{bdt(amount)}</span>
+                  </div>
+                ))}
+                {memberSettlement.charges.staffShare > 0 && (
+                  <div className="flex justify-between items-center p-2 rounded bg-muted/50">
+                    <span className="text-sm">Staff</span>
+                    <span className="text-sm font-semibold">{bdt(memberSettlement.charges.staffShare)}</span>
+                  </div>
+                )}
+                {memberSettlement.charges.previousDue > 0 && (
+                  <div className="flex justify-between items-center p-2 rounded bg-destructive/10">
+                    <span className="text-sm font-medium text-destructive">Previous Due</span>
+                    <span className="text-sm font-semibold text-destructive">{bdt(memberSettlement.charges.previousDue)}</span>
+                  </div>
+                )}
+                {memberSettlement.charges.previousDeposit > 0 && (
+                  <div className="flex justify-between items-center p-2 rounded bg-green-500/10">
+                    <span className="text-sm font-medium text-green-600">Previous Deposit (credit)</span>
+                    <span className="text-sm font-semibold text-green-600">-{bdt(memberSettlement.charges.previousDeposit)}</span>
+                  </div>
+                )}
+                {memberSettlement.charges.previousCredit > 0 && (
+                  <div className="flex justify-between items-center p-2 rounded bg-amber-500/10">
+                    <span className="text-sm font-medium text-amber-600">Previous Credit (debt)</span>
+                    <span className="text-sm font-semibold text-amber-600">+{bdt(memberSettlement.charges.previousCredit)}</span>
+                  </div>
+                )}
+              </div>
             </Card>
 
             {/* RECORD PAYMENT */}
             <Card className="p-5">
               <h3 className="font-semibold text-lg mb-4 flex items-center gap-2"><CreditCard className="h-5 w-5" />Record Payment</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mb-6">
-                {(() => {
-                  const payCategories: { key: string; label: string; category: string }[] = [];
-                  if (currentMember?.services) {
-                    currentMember.services.filter((s) => s.enabled).forEach((svc) => {
-                      const map: Record<string, { label: string; category: string }> = { rent: { label: "Rent", category: "rent" }, meals: { label: "Meals", category: "meal" }, internet: { label: "Internet", category: "internet" }, electricity: { label: "Electricity", category: "electricity" }, gas: { label: "Gas", category: "gas" }, water: { label: "Water", category: "water" }, cooking_staff: { label: "Cooking", category: "staff" }, cleaning_staff: { label: "Cleaning", category: "staff" }, security_staff: { label: "Security", category: "staff" }, generator: { label: "Generator", category: "other" }, maintenance: { label: "Maintenance", category: "other" }, laundry: { label: "Laundry", category: "other" }, parking: { label: "Parking", category: "other" }, other_services: { label: "Other", category: "other" } };
-                      if (map[svc.type] && !payCategories.find((p) => p.key === map[svc.type].category)) payCategories.push({ key: map[svc.type].category, label: map[svc.type].label, category: map[svc.type].category });
-                    });
-                  }
-                  if (!payCategories.find((p) => p.key === "other")) payCategories.push({ key: "other", label: "Other", category: "other" });
-                  return payCategories.map((payOpt) => (
-                    <form key={payOpt.key} onSubmit={(e) => { e.preventDefault(); const f = e.target as HTMLFormElement; const amt = parseFloat((f.elements.namedItem("quickAmount") as HTMLInputElement).value); if (!amt || amt <= 0) return toast.error("Enter amount"); handleQuickPayment(amt, `${payOpt.label} Payment`, payOpt.category); f.reset(); }} className="contents">
-                      <div className="flex flex-col gap-1 p-3 rounded-lg border hover:bg-accent/50 cursor-pointer"><span className="text-xs font-medium text-muted-foreground">{payOpt.label}</span><input type="number" name="quickAmount" min="0" step="0.01" placeholder="৳" required className="w-full text-sm bg-transparent border-b border-dashed outline-none tabular-nums" /></div>
-                    </form>
-                  ));
-                })()}
-              </div>
+
+              {/* Quick Pay per charge */}
+              {pendingCharges.length > 0 && (
+                <div className="mb-6">
+                  <h4 className="text-sm font-medium text-muted-foreground mb-2">Quick Pay Individual Charges</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {pendingCharges.map((charge) => (
+                      <form
+                        key={charge.id}
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const f = e.target as HTMLFormElement;
+                          const amt = parseFloat((f.elements.namedItem("quickAmount") as HTMLInputElement).value);
+                          if (!amt || amt <= 0) return toast.error("Enter amount");
+                          handleQuickPayment(amt, `Payment for ${charge.chargeLabel}`, charge.category, charge.id);
+                          f.reset();
+                        }}
+                        className="contents"
+                      >
+                        <div className="flex flex-col gap-1 p-3 rounded-lg border hover:bg-accent/50">
+                          <span className="text-xs font-medium text-muted-foreground">{charge.chargeLabel}</span>
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-destructive">Due: {bdt(charge.dueAmount)}</span>
+                          </div>
+                          <input
+                            type="number"
+                            name="quickAmount"
+                            min="0"
+                            step="0.01"
+                            placeholder="৳ amount"
+                            required
+                            className="w-full text-sm bg-transparent border-b border-dashed outline-none tabular-nums"
+                          />
+                        </div>
+                      </form>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <details className="border rounded-lg p-4">
                 <summary className="text-sm font-medium cursor-pointer text-muted-foreground hover:text-foreground">Full Payment Form</summary>
                 <form onSubmit={handleRecordPayment} className="space-y-4 mt-4">
                   <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2"><label className="text-sm font-medium">Amount (৳)</label><Input type="number" name="amount" min="0" step="0.01" placeholder="Enter amount" required /></div>
-                    <div className="space-y-2"><label className="text-sm font-medium">Method</label><Select name="method" defaultValue="Cash"><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{METHODS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent></Select></div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Amount (৳)</label>
+                      <Input type="number" name="amount" min="0" step="0.01" placeholder="Enter amount" required />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Method</label>
+                      <Select name="method" defaultValue="Cash">
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>{METHODS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2"><label className="text-sm font-medium">Payment For</label><Select name="category" defaultValue="other"><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{(() => { const cats: { value: string; label: string }[] = []; if (currentMember?.services) { const added = new Set<string>(); currentMember.services.filter((s) => s.enabled).forEach((svc) => { const map: Record<string, { label: string; cat: string }> = { rent: { label: "Rent", cat: "rent" }, meals: { label: "Meals", cat: "meal" }, internet: { label: "Internet", cat: "internet" }, electricity: { label: "Electricity", cat: "electricity" }, gas: { label: "Gas", cat: "gas" }, water: { label: "Water", cat: "water" }, cooking_staff: { label: "Staff (Cooking)", cat: "staff" }, cleaning_staff: { label: "Staff (Cleaning)", cat: "staff" }, security_staff: { label: "Staff (Security)", cat: "staff" }, generator: { label: "Generator", cat: "other" }, maintenance: { label: "Maintenance", cat: "other" }, laundry: { label: "Laundry", cat: "other" }, parking: { label: "Parking", cat: "other" }, other_services: { label: "Other", cat: "other" } }; if (map[svc.type] && !added.has(map[svc.type].cat)) { added.add(map[svc.type].cat); cats.push({ value: map[svc.type].cat, label: map[svc.type].label }); } }); } if (!cats.find((c) => c.value === "other")) cats.push({ value: "other", label: "Other" }); return cats.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>); })()}</SelectContent></Select></div>
-                    <div className="space-y-2"><label className="text-sm font-medium">Date</label><Input type="date" name="date" defaultValue={ym + "-01"} /></div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Pay Specific Charge</label>
+                      <Select name="targetCharge" defaultValue="__all__">
+                        <SelectTrigger><SelectValue placeholder="Select charge" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__all__">-- Auto-allocate to all pending --</SelectItem>
+                          {pendingCharges.map((charge) => (
+                            <SelectItem key={charge.id} value={charge.id}>
+                              {charge.chargeLabel} - {bdt(charge.dueAmount)} due
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Date</label>
+                      <Input type="date" name="date" defaultValue={ym + "-01"} />
+                    </div>
                   </div>
-                  <div className="space-y-2"><label className="text-sm font-medium">Link to Expense</label><Select name="referenceId" defaultValue="__none__"><SelectTrigger><SelectValue placeholder="Select expense" /></SelectTrigger><SelectContent><SelectItem value="__none__">-- General Payment --</SelectItem>{monthExpenses.filter((e) => !e.paidBy || e.paidBy !== currentMember?.id).map((exp) => <SelectItem key={exp.id} value={exp.id}>{EXPENSE_CATEGORY_LABELS[exp.category] || exp.category} - {bdt(exp.amount)} ({exp.date})</SelectItem>)}</SelectContent></Select></div>
-                  <div className="space-y-2"><label className="text-sm font-medium">Notes</label><Textarea name="notes" rows={2} placeholder="Optional notes" /></div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Notes</label>
+                    <Textarea name="notes" rows={2} placeholder="Optional notes" />
+                  </div>
                   <Button type="submit" className="w-full">Record Payment</Button>
                 </form>
               </details>
             </Card>
 
-            {/* TRANSACTIONS */}
+            {/* TRANSACTION HISTORY */}
             <Card className="p-5">
-              <h3 className="font-semibold text-lg mb-4">Transactions</h3>
-              {memberEntries.length === 0 ? <p className="text-sm text-muted-foreground text-center py-6">No transactions for this month</p> : (
+              <h3 className="font-semibold text-lg mb-4">Transaction History</h3>
+              {memberEntries.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">No transactions for this month</p>
+              ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="text-xs uppercase text-muted-foreground bg-muted/50">
-                      <tr><th className="text-left p-3 font-medium">Date</th><th className="text-left p-3 font-medium">Type</th><th className="text-left p-3 font-medium">Category</th><th className="text-left p-3 font-medium">Notes</th><th className="text-right p-3 font-medium">Amount</th>{profile && <th></th>}</tr>
+                      <tr>
+                        <th className="text-left p-3 font-medium">Date</th>
+                        <th className="text-left p-3 font-medium">Type</th>
+                        <th className="text-left p-3 font-medium">Category</th>
+                        <th className="text-left p-3 font-medium">Notes</th>
+                        <th className="text-center p-3 font-medium">Status</th>
+                        <th className="text-right p-3 font-medium">Amount</th>
+                        {profile && <th></th>}
+                      </tr>
                     </thead>
                     <tbody>
-                      {memberEntries.map((entry) => (
-                        <tr key={entry.id} className="border-t hover:bg-muted/30">
-                          <td className="p-3">{entry.date}</td>
-                          <td className="p-3 capitalize">{entry.transactionType.replace(/_/g, " ")}</td>
-                          <td className="p-3 capitalize">{entry.category}</td>
-                          <td className="p-3 text-muted-foreground max-w-xs truncate">{entry.notes || "—"}</td>
-                          <td className={`p-3 text-right tabular-nums font-semibold ${entry.transactionType === "payment" || entry.transactionType === "bazar_contribution" || entry.transactionType === "expense_contribution" ? "text-primary" : "text-destructive"}`}>{bdt(entry.amount)}</td>
-                          {profile && <td className="p-3"><Button size="sm" variant="destructive" onClick={() => handleDeleteTransaction(entry)}><Trash2 className="h-3.5 w-3.5" /></Button></td>}
-                        </tr>
-                      ))}
+                      {memberEntries.map((entry) => {
+                        const isCharge = CHARGE_TRANSACTION_TYPES.includes(entry.transactionType);
+                        const chargeStatus = isCharge ? (entry as any).chargeStatus : null;
+                        return (
+                          <tr key={entry.id} className="border-t hover:bg-muted/30">
+                            <td className="p-3">{entry.date}</td>
+                            <td className="p-3 capitalize">{entry.transactionType.replace(/_/g, " ")}</td>
+                            <td className="p-3 capitalize">{entry.category}</td>
+                            <td className="p-3 text-muted-foreground max-w-[200px]">
+                              <span className="whitespace-normal break-words">{entry.notes || "—"}</span>
+                            </td>
+                            <td className="p-3 text-center">
+                              {chargeStatus && (
+                                <Badge variant="outline" className={`text-xs ${
+                                  chargeStatus === "paid" ? "bg-green-500/10 text-green-600" :
+                                  chargeStatus === "partial" ? "bg-amber-500/10 text-amber-600" : ""
+                                }`}>
+                                  {chargeStatus === "paid" ? "Paid" : chargeStatus === "partial" ? "Partial" : "Pending"}
+                                </Badge>
+                              )}
+                            </td>
+                            <td className={`p-3 text-right tabular-nums font-semibold ${
+                              entry.transactionType === "payment" || entry.transactionType === "bazar_contribution" || entry.transactionType === "expense_contribution"
+                                ? "text-primary" : "text-destructive"
+                            }`}>
+                              {bdt(entry.amount)}
+                            </td>
+                            {profile && (
+                              <td className="p-3">
+                                <Button size="sm" variant="destructive" onClick={() => handleDeleteTransaction(entry)}>
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -416,4 +1087,26 @@ function ChargesPage() {
       </div>
     </div>
   );
+}
+
+/**
+ * Get a human-readable label for a charge entry.
+ * Extracts meaningful description from the transaction type, category, and notes.
+ */
+function getChargeLabel(entry: LedgerEntry): string {
+  // If it's a utility_charge, extract the expense category label from notes or category
+  if (entry.transactionType === "utility_charge") {
+    const catLabel = EXPENSE_CATEGORY_LABELS[entry.category as keyof typeof EXPENSE_CATEGORY_LABELS];
+    if (catLabel) return catLabel;
+    // Try to extract from notes
+    if (entry.notes) {
+      const match = entry.notes.match(/^([^:]+)/);
+      if (match) return match[1].trim();
+    }
+    return "Shared Expense";
+  }
+
+  // Use predefined labels for standard charge types
+  return CHARGE_TYPE_LABELS[entry.transactionType] ||
+    entry.transactionType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }

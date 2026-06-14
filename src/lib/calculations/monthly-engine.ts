@@ -43,6 +43,7 @@ import {
   where,
   getDocs,
   orderBy,
+  deleteDoc,
   type QueryConstraint,
 } from "firebase/firestore";
 import { db } from "../firebase";
@@ -86,6 +87,9 @@ export interface MonthlyGenerationResult {
   advancesCreated: number;
   advancesRecovered: number;
   ledgerEntriesCreated: number;
+  expensesDeduped: number;
+  bazarDeduped: number;
+  duplicateWarnings: string[];
   totalCharges: number;
   totalInternalPayments: number;
   totalAdvances: number;
@@ -138,7 +142,7 @@ export async function generateMonthlyFinancials(
   uid?: string,
 ): Promise<MonthlyGenerationResult> {
   // Fetch all data for the month
-  const [members, mealEntries, bazarEntries, expenses, expenseAllocations, payments, staff, rooms, existingAdvances, existingAdvanceRecoveries, existingLedgerEntries, existingRentCharges, closings] = await Promise.all([
+  let [members, mealEntries, bazarEntries, expenses, expenseAllocations, payments, staff, rooms, existingAdvances, existingAdvanceRecoveries, existingLedgerEntries, existingRentCharges, closings] = await Promise.all([
     fetchCollection<Member>("members"),
     fetchCollection<MealEntry>("meals"),
     fetchCollection<Bazar>("bazar"),
@@ -154,12 +158,91 @@ export async function generateMonthlyFinancials(
     fetchCollection<MonthlyClosing>("monthly_closing"),
   ]);
 
-  const activeMembers = members.filter((m) => m.active);
-  const monthMeals = mealEntries.filter((m) => m.ym === ym);
-  const monthBazar = bazarEntries.filter((b) => b.ym === ym);
-  const monthExpenses = expenses.filter((e) => e.ym === ym);
-  const monthPayments = payments.filter((p) => p.ym === ym);
-  const monthAllocations = expenseAllocations.filter((a) => a.ym === ym);
+  let activeMembers = members.filter((m) => m.active);
+  let monthMeals = mealEntries.filter((m) => m.ym === ym);
+  let monthBazar = bazarEntries.filter((b) => b.ym === ym);
+  let monthExpenses = expenses.filter((e) => e.ym === ym);
+  let monthPayments = payments.filter((p) => p.ym === ym);
+  let monthAllocations = expenseAllocations.filter((a) => a.ym === ym);
+
+  const duplicateWarnings: string[] = [];
+  let expensesDeduped = 0;
+  let bazarDeduped = 0;
+
+  // =========================================================================
+  // DEDUP: Clean near-duplicate expenses and bazar entries before processing
+  // =========================================================================
+  {
+    const monthExpenseIds = new Set(monthExpenses.map((e) => e.id));
+
+    const createExpenseKey = (e: Expense) => `${e.date}|${e.category}|${Math.round((e.amount || 0) * 100)}`;
+
+    const expenseBuckets = new Map<string, Expense[]>();
+    monthExpenses.forEach((e) => {
+      const key = createExpenseKey(e);
+      const arr = expenseBuckets.get(key) || [];
+      arr.push(e);
+      expenseBuckets.set(key, arr);
+    });
+
+    const expenseDeleteIds: string[] = [];
+    expenseBuckets.forEach((arr) => {
+      if (arr.length <= 1) return;
+      const sorted = [...arr].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      const hasPaid = sorted.some((e) => !!e.paidBy);
+      const paidEntries = hasPaid ? sorted.filter((e) => !!e.paidBy) : [];
+      if (paidEntries.length >= 2) {
+        const signatories = paidEntries.map((e) => e.paidByName || e.paidBy).filter(Boolean).join(" + ");
+        duplicateWarnings.push(`Expense duplicate (${createExpenseKey(paidEntries[0])}): both ${signatories} recorded as payers — kept first, deleted ${paidEntries.length - 1} extra`);
+        expenseDeleteIds.push(...paidEntries.slice(1).map((e) => e.id));
+      }
+      const unused = sorted.filter((e) => !e.paidBy);
+      if (unused.length > 1) {
+        const existingIds = new Set(expenseDeleteIds);
+        unused.slice(1).forEach((e) => {
+          if (!existingIds.has(e.id)) expenseDeleteIds.push(e.id);
+        });
+      }
+    });
+
+    const monthBazarIds = new Set(monthBazar.map((b) => b.id));
+
+    const createBazarKey = (b: Bazar) => `${b.date}|${b.category}|${Math.round((b.total || 0) * 100)}`;
+
+    const bazarBuckets = new Map<string, Bazar[]>();
+    monthBazar.forEach((b) => {
+      const key = createBazarKey(b);
+      const arr = bazarBuckets.get(key) || [];
+      arr.push(b);
+      bazarBuckets.set(key, arr);
+    });
+
+    const bazarDeleteIds: string[] = [];
+    bazarBuckets.forEach((arr) => {
+      if (arr.length <= 1) return;
+      const sorted = [...arr].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      const buyerNames = sorted.map((b) => b.buyerName || b.buyerId).filter(Boolean).join(" + ");
+      duplicateWarnings.push(`Bazar duplicate (${createBazarKey(sorted[0])}): buyers ${buyerNames} — kept first, deleted ${sorted.length - 1} extra`);
+      bazarDeleteIds.push(...sorted.slice(1).map((b) => b.id));
+    });
+
+    if (expenseDeleteIds.length > 0 || bazarDeleteIds.length > 0) {
+      const dedupBatch = writeBatch(db);
+      expenseDeleteIds.forEach((id) => {
+        if (monthExpenseIds.has(id)) dedupBatch.delete(doc(db, "expenses", id));
+      });
+      bazarDeleteIds.forEach((id) => {
+        if (monthBazarIds.has(id)) dedupBatch.delete(doc(db, "bazar", id));
+      });
+      await dedupBatch.commit();
+
+      monthExpenses = monthExpenses.filter((e) => !expenseDeleteIds.includes(e.id));
+      monthBazar = monthBazar.filter((b) => !bazarDeleteIds.includes(b.id));
+
+      expensesDeduped = expenseDeleteIds.length;
+      bazarDeduped = bazarDeleteIds.length;
+    }
+  }
 
   // Calculate meal rate
   const { mealRate } = calculateMealRate(bazarEntries, mealEntries, ym);
@@ -654,6 +737,9 @@ export async function generateMonthlyFinancials(
     advancesCreated: generatedAdvances.length,
     advancesRecovered: generatedAdvanceRecoveries.length,
     ledgerEntriesCreated: generatedCharges.length + generatedInternalPayments.length + generatedAdvances.length + generatedAdvanceRecoveries.length,
+    expensesDeduped,
+    bazarDeduped,
+    duplicateWarnings,
     totalCharges,
     totalInternalPayments,
     totalAdvances,
@@ -675,8 +761,6 @@ export async function regenerateMonthlyFinancials(
   ym: string,
   uid?: string,
 ): Promise<MonthlyGenerationResult> {
-  // For now, just call the normal generation (it skips existing records)
-  // A full regeneration would require deleting existing generated records first
   return generateMonthlyFinancials(ym, uid);
 }
 
@@ -684,126 +768,7 @@ export async function regenerateMonthlyFinancials(
 // INDIVIDUAL RECORD GENERATION (for real-time updates)
 // ============================================================================
 
-/**
- * Generate records for a single expense.
- * Called when a new expense is added.
- */
-export async function generateForExpense(
-  expense: Expense,
-  members: Member[],
-  uid?: string,
-): Promise<void> {
-  const activeMembers = members.filter((m) => m.active);
-  const ym = expense.ym;
-  const amount = expense.amount || 0;
-
-  const serviceType = getServiceTypeForExpenseCategory(expense.category);
-  const subscribers = serviceType
-    ? activeMembers.filter((m) => isMemberSubscribedToService(m, serviceType))
-    : activeMembers;
-  const totalSubscribers = subscribers.length || 1;
-
-  const batch = writeBatch(db);
-
-  // Create allocations
-  for (const member of activeMembers) {
-    const isSubscribed = serviceType
-      ? isMemberSubscribedToService(member, serviceType)
-      : true;
-
-    if (!isSubscribed) continue;
-
-    const memberAmount = amount / totalSubscribers;
-    if (memberAmount <= 0) continue;
-
-    // Create allocation
-    const allocationId = `${expense.id}_${member.id}`;
-    batch.set(doc(db, "expense_allocations", allocationId), {
-      id: allocationId,
-      expenseId: expense.id,
-      memberId: member.id,
-      memberName: member.name,
-      category: expense.category,
-      amount: Math.round(memberAmount * 100) / 100,
-      subscribed: true,
-      ym,
-      status: "pending",
-      createdAt: Date.now(),
-      createdBy: uid,
-    });
-
-    // Create charge (skip if payer)
-    if (member.id !== expense.paidBy) {
-      const chargeId = `charge_${expense.id}_${member.id}`;
-      batch.set(doc(db, "ledgers", chargeId), {
-        memberId: member.id,
-        memberName: member.name,
-        date: expense.date,
-        ym,
-        transactionType: "utility_charge",
-        category: expense.category,
-        amount: Math.round(memberAmount * 100) / 100,
-        notes: `${EXPENSE_CATEGORY_LABELS[expense.category] || expense.category} for ${ym}`,
-        referenceId: expense.id,
-        referenceType: "expense",
-        createdAt: Date.now(),
-        createdBy: uid,
-      });
-    }
-  }
-
-  // Handle payer's internal payment and advance
-  if (expense.paidBy) {
-    const payer = activeMembers.find((m) => m.id === expense.paidBy);
-    if (payer) {
-      const payerIsSubscribed = serviceType
-        ? isMemberSubscribedToService(payer, serviceType)
-        : true;
-      const payerShare = payerIsSubscribed ? amount / totalSubscribers : 0;
-
-      if (payerShare > 0) {
-        // Internal payment
-        const paymentId = `internal_${expense.id}_${expense.paidBy}`;
-        batch.set(doc(db, "payments", paymentId), {
-          memberId: expense.paidBy,
-          memberName: payer.name,
-          amount: payerShare,
-          method: "cash",
-          date: expense.date,
-          ym,
-          status: "paid",
-          category: expense.category,
-          notes: `Internal: ${payer.name}'s own share of ${EXPENSE_CATEGORY_LABELS[expense.category] || expense.category}`,
-          referenceId: expense.id,
-          referenceType: "expense",
-          createdAt: Date.now(),
-          createdBy: uid,
-        });
-
-        // Advance for excess
-        const advanceAmount = amount - payerShare;
-        if (advanceAmount > 0) {
-          const advanceId = `advance_${expense.id}_${expense.paidBy}`;
-          batch.set(doc(db, "advances", advanceId), {
-            memberId: expense.paidBy,
-            memberName: payer.name,
-            amount: advanceAmount,
-            remainingAmount: advanceAmount,
-            source: `${EXPENSE_CATEGORY_LABELS[expense.category] || expense.category} - ${expense.date}`,
-            sourceType: "expense",
-            sourceId: expense.id,
-            ym,
-            status: "outstanding",
-            createdAt: Date.now(),
-            createdBy: uid,
-          });
-        }
-      }
-    }
-  }
-
-  await batch.commit();
-}
+// Note: generateForExpense was removed due to corruption. Use generateMonthlyFinancials instead.
 
 // ============================================================================
 // HELPER FUNCTIONS

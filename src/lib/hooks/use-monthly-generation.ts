@@ -21,9 +21,14 @@ export function useMonthlyGeneration() {
       setLastResult(result);
       
       if (result.reconciliation.balanced) {
-        toast.success(
-          `Generated: ${result.chargesGenerated} charges, ${result.internalPaymentsGenerated} internal payments, ${result.advancesCreated} advances`
-        );
+        let msg = `Generated: ${result.chargesGenerated} charges, ${result.internalPaymentsGenerated} internal payments, ${result.advancesCreated} advances`;
+        if (result.expensesDeduped > 0 || result.bazarDeduped > 0) {
+          msg += ` (cleaned ${result.expensesDeduped} duplicate expenses, ${result.bazarDeduped} duplicate bazar entries)`;
+        }
+        if (result.duplicateWarnings.length > 0) {
+          toast.warning(result.duplicateWarnings.join(" | "), { duration: 6000 });
+        }
+        toast.success(msg);
       } else {
         toast.warning(
           `Generated with ${result.reconciliation.errors.length} issues. Check reconciliation.`
@@ -46,9 +51,14 @@ export function useMonthlyGeneration() {
       setLastResult(result);
       
       if (result.reconciliation.balanced) {
-        toast.success(
-          `Regenerated: ${result.chargesGenerated} charges, ${result.internalPaymentsGenerated} internal payments`
-        );
+        let msg = `Regenerated: ${result.chargesGenerated} charges, ${result.internalPaymentsGenerated} internal payments`;
+        if (result.expensesDeduped > 0 || result.bazarDeduped > 0) {
+          msg += ` (cleaned ${result.expensesDeduped} duplicate expenses, ${result.bazarDeduped} duplicate bazar entries)`;
+        }
+        if (result.duplicateWarnings.length > 0) {
+          toast.warning(result.duplicateWarnings.join(" | "), { duration: 6000 });
+        }
+        toast.success(msg);
       } else {
         toast.warning(
           `Regenerated with ${result.reconciliation.errors.length} issues.`

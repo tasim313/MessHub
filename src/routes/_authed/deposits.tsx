@@ -350,7 +350,7 @@ function DepositsPage() {
                             Receive {bdt(s.receivableAmount)}
                           </Badge>
                         </td>
-                        <td className="p-3 text-xs text-muted-foreground max-w-[250px] truncate" title={reason}>
+                        <td className="p-3 text-xs text-muted-foreground whitespace-normal break-words">
                           {reason}
                         </td>
                       </tr>
