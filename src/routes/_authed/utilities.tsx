@@ -23,9 +23,7 @@ import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
 import type { Expense, ExpenseCategory, ExpenseStatus, AllocationMethod, ExpenseAllocation } from "@/lib/types";
 import { EXPENSE_CATEGORY_LABELS, EXPENSE_CATEGORY_TO_SERVICE } from "@/lib/types";
-import { calculateExpenseAllocations } from "@/lib/calculations/engine";
-import { writeBatch, doc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { createExpenseWithAccounting } from "@/lib/workflow-integration";
 
 export const Route = createFileRoute("/_authed/utilities")({
   component: ExpensesPage,
@@ -229,45 +227,28 @@ function ExpensesPage() {
       };
 
       if (profile?.role === "owner" && editing) {
-        // Update expense and regenerate allocations
+        // Update expense (keep existing accounting - don't re-create payments/advances)
         await updateDocIn("expenses", editing.id, { ...payload, updatedAt: Date.now() });
-        
-        // Regenerate allocations for the updated expense
-        const updatedExpense: Expense = { id: editing.id, ...payload } as Expense;
-        const newAllocations = calculateExpenseAllocations(updatedExpense, members);
-        
-        const batch = writeBatch(db);
-        for (const alloc of newAllocations) {
-          const allocRef = doc(db, "expense_allocations", alloc.id);
-          batch.set(allocRef, {
-            ...alloc,
-            createdAt: Date.now(),
-            createdBy: profile?.uid,
-          }, { merge: true });
-        }
-        await batch.commit();
-        
-        toast.success("Expense updated with allocations");
+        toast.success("Expense updated");
       } else if (profile?.role === "owner") {
-        // Create expense and automatically generate member allocations
-        const expenseRef = await addDocTo("expenses", payload);
+        // Use the new accounting workflow that automatically:
+        // 1. Creates the expense
+        // 2. Creates member allocations
+        // 3. Records internal payment for payer's share (appears in Payments)
+        // 4. Creates advance for excess
+        // 5. Generates ledger charges for other members
+        const result = await createExpenseWithAccounting(
+          payload,
+          members,
+          [],
+          [],
+          profile?.uid,
+        );
         
-        // Automatically create expense allocations for all active members
-        const tempExpense: Expense = { id: expenseRef.id, ...payload } as Expense;
-        const allocations = calculateExpenseAllocations(tempExpense, members);
-        
-        const batch = writeBatch(db);
-        for (const alloc of allocations) {
-          const allocRef = doc(db, "expense_allocations", alloc.id);
-          batch.set(allocRef, {
-            ...alloc,
-            createdAt: Date.now(),
-            createdBy: profile?.uid,
-          });
-        }
-        await batch.commit();
-        
-        toast.success(`Expense added with ${allocations.length} member allocations`);
+        let msg = `Expense added with ${result.allocationsCount} member allocations`;
+        if (result.internalPaymentRecorded) msg += `, internal payment recorded`;
+        if (result.advanceCreated) msg += `, advance created`;
+        toast.success(msg);
       } else if (profile) {
         await submitChangeRequest({
           collectionName: "expenses",

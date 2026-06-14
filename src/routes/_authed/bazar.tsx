@@ -15,6 +15,7 @@ import { Plus, Trash2, ShoppingBasket, Search, Pencil, Filter, X, Download } fro
 import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
 import { exportToCSV } from "@/lib/export";
+import { createBazarWithAccounting } from "@/lib/workflow-integration";
 
 export const Route = createFileRoute("/_authed/bazar")({
   component: BazarPage,
@@ -117,8 +118,9 @@ function BazarPage() {
         await updateDocIn("bazar", editing.id, payload);
         toast.success("Bazar updated");
       } else if (profile?.role === "owner") {
-        await addDocTo("bazar", payload);
-        toast.success("Bazar added");
+        // Use accounting workflow - records bazar contribution in payments & ledger
+        const result = await createBazarWithAccounting(payload as any, profile?.uid);
+        toast.success("Bazar added with payment recorded");
       } else if (profile) {
         await submitChangeRequest({
           collectionName: "bazar",

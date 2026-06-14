@@ -77,7 +77,9 @@ export type TransactionType =
   | "other_charge"
   | "bazar_contribution"
   | "expense_contribution"
-  | "monthly_closing";
+  | "monthly_closing"
+  | "advance_given"
+  | "advance_recovered";
 
 export type TransactionCategory =
   | "rent"
@@ -106,7 +108,9 @@ export type TransactionCategory =
   | "wifi"
   | "cleaner_salary"
   | "security_salary"
-  | "other_expense";
+  | "other_expense"
+  | "advance"
+  | "advance_recovery";
 
 // ============================================================================
 // Unified Expense System - Covers ALL shared expenses
@@ -255,6 +259,65 @@ export interface ExpenseAllocation {
   paidAmount?: number;
   dueAmount?: number;
   status?: "pending" | "paid" | "partial";
+  createdAt?: number;
+  createdBy?: string;
+}
+
+// ============================================================================
+// Advance / Advance Recovery System
+// ============================================================================
+
+/**
+ * Represents money advanced by a member who paid more than their share of an expense.
+ * This is a LIABILITY of the mess toward that member.
+ */
+export interface Advance {
+  id: string;
+  /** The member who advanced the money */
+  memberId: string;
+  memberName: string;
+  /** Total amount advanced */
+  amount: number;
+  /** Remaining un-recovered amount */
+  remainingAmount: number;
+  /** Source of the advance (expense, etc.) */
+  source: string;
+  sourceType: "expense" | "utility" | "bazar" | "rent" | "other";
+  /** Source reference ID */
+  sourceId: string;
+  /** Month */
+  ym: string;
+  /** Status */
+  status: "outstanding" | "partially_recovered" | "recovered";
+  /** Notes */
+  notes?: string;
+  createdAt?: number;
+  createdBy?: string;
+  updatedAt?: number;
+}
+
+/**
+ * Tracks each recovery of an advance.
+ * When another member pays, their payment recovers part of the advance.
+ */
+export interface AdvanceRecovery {
+  id: string;
+  /** Which advance this recovery is for */
+  advanceId: string;
+  /** The advance owner (who gets their money back) */
+  advanceOwnerId: string;
+  advanceOwnerName: string;
+  /** The member who made the payment that triggered this recovery */
+  recoveredFromMemberId: string;
+  recoveredFromMemberName: string;
+  /** Amount recovered */
+  amount: number;
+  /** The payment that triggered this recovery */
+  sourcePaymentId: string;
+  /** Month */
+  ym: string;
+  date: string;
+  notes?: string;
   createdAt?: number;
   createdBy?: string;
 }
@@ -583,6 +646,13 @@ export interface MonthlyClosing {
   createdAt?: number;
   createdBy?: string;
   status: "open" | "closed";
+  memberBreakdown?: Record<string, {
+    deposit: number;
+    credit: number;
+    balance: number;
+    totalCharges: number;
+    totalContributions: number;
+  }>;
 }
 
 export interface Settings {
