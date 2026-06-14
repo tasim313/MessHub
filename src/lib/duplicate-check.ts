@@ -203,3 +203,25 @@ export async function checkLedgerChargeExists(memberId: string, month: string, c
   const snap = await getDocs(q);
   return !snap.empty;
 }
+
+/**
+ * Check if an expense allocation already exists for an expense and member
+ * Returns true if duplicate exists
+ */
+export async function checkExpenseAllocationExists(expenseId: string, memberId: string): Promise<boolean> {
+  const q = query(
+    collection(db, "expense_allocations"),
+    where("expenseId", "==", expenseId),
+    where("memberId", "==", memberId)
+  );
+  const snap = await getDocs(q);
+  return !snap.empty;
+}
+
+/**
+ * Generate a unique ID for expense allocations
+ * Format: {expenseId}_{memberId}
+ */
+export function generateExpenseAllocationId(expenseId: string, memberId: string): string {
+  return `${expenseId}_${memberId}`;
+}

@@ -10,16 +10,22 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { useCollection, addDocTo, updateDocIn, deleteDocFrom, orderBy, type Member } from "@/lib/data";
+import {
+  useCollection, addDocTo, updateDocIn, deleteDocFrom, orderBy, type Member,
+} from "@/lib/data";
 import { dayKey, bdt, ymKey } from "@/lib/format";
 import {
   Plus, Trash2, Pencil, Receipt, Loader2, User,
   Search, X, Calendar, Filter, RotateCcw,
 } from "lucide-react";
+import { MonthPicker } from "@/components/ui/month-picker";
 import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
-import type { Expense, ExpenseCategory, ExpenseStatus, AllocationMethod } from "@/lib/types";
-import { EXPENSE_CATEGORY_LABELS } from "@/lib/types";
+import type { Expense, ExpenseCategory, ExpenseStatus, AllocationMethod, ExpenseAllocation } from "@/lib/types";
+import { EXPENSE_CATEGORY_LABELS, EXPENSE_CATEGORY_TO_SERVICE } from "@/lib/types";
+import { calculateExpenseAllocations } from "@/lib/calculations/engine";
+import { writeBatch, doc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
 export const Route = createFileRoute("/_authed/utilities")({
   component: ExpensesPage,
@@ -203,10 +209,10 @@ function ExpensesPage() {
 
     setSaving(true);
     try {
-      const paidBy = form.paidBy === "__none__" ? null : form.paidBy;
-      const paidByName = paidBy ? (members.find((m) => m.id === paidBy)?.name || null) : null;
+      const paidBy = form.paidBy === "__none__" ? undefined : form.paidBy;
+      const paidByName = paidBy ? (members.find((m) => m.id === paidBy)?.name || undefined) : undefined;
 
-      const payload = {
+      const payload: Partial<Expense> = {
         category: form.category,
         amount,
         date: form.date,
@@ -215,7 +221,7 @@ function ExpensesPage() {
         paidByName,
         allocationMethod: form.allocationMethod,
         description: form.description,
-        notes: form.notes || null,
+        notes: form.notes || undefined,
         status: paidBy ? ("paid" as ExpenseStatus) : ("pending" as ExpenseStatus),
         allocatedAmount: amount,
         paidAmount: paidBy ? amount : 0,
@@ -223,11 +229,45 @@ function ExpensesPage() {
       };
 
       if (profile?.role === "owner" && editing) {
+        // Update expense and regenerate allocations
         await updateDocIn("expenses", editing.id, { ...payload, updatedAt: Date.now() });
-        toast.success("Expense updated");
+        
+        // Regenerate allocations for the updated expense
+        const updatedExpense: Expense = { id: editing.id, ...payload } as Expense;
+        const newAllocations = calculateExpenseAllocations(updatedExpense, members);
+        
+        const batch = writeBatch(db);
+        for (const alloc of newAllocations) {
+          const allocRef = doc(db, "expense_allocations", alloc.id);
+          batch.set(allocRef, {
+            ...alloc,
+            createdAt: Date.now(),
+            createdBy: profile?.uid,
+          }, { merge: true });
+        }
+        await batch.commit();
+        
+        toast.success("Expense updated with allocations");
       } else if (profile?.role === "owner") {
-        await addDocTo("expenses", payload);
-        toast.success("Expense added");
+        // Create expense and automatically generate member allocations
+        const expenseRef = await addDocTo("expenses", payload);
+        
+        // Automatically create expense allocations for all active members
+        const tempExpense: Expense = { id: expenseRef.id, ...payload } as Expense;
+        const allocations = calculateExpenseAllocations(tempExpense, members);
+        
+        const batch = writeBatch(db);
+        for (const alloc of allocations) {
+          const allocRef = doc(db, "expense_allocations", alloc.id);
+          batch.set(allocRef, {
+            ...alloc,
+            createdAt: Date.now(),
+            createdBy: profile?.uid,
+          });
+        }
+        await batch.commit();
+        
+        toast.success(`Expense added with ${allocations.length} member allocations`);
       } else if (profile) {
         await submitChangeRequest({
           collectionName: "expenses",
@@ -424,14 +464,12 @@ function ExpensesPage() {
             </div>
 
             {/* Quick Month Selector */}
-            <Input
-              type="month"
+            <MonthPicker
               value={filterMonth}
-              onChange={(e) => {
-                setFilterMonth(e.target.value);
+              onChange={(v) => {
+                setFilterMonth(v);
                 setFilterMode("month");
               }}
-              className="w-44"
             />
 
             {/* Filter Toggle Button */}

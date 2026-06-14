@@ -15,18 +15,17 @@ import {
 import { ymKey, bdt } from "@/lib/format";
 import {
   Wallet, PiggyBank, Search, Filter, RotateCcw, Calendar,
-  ArrowUpRight, TrendingUp, TrendingDown,
+  ArrowUpRight, TrendingUp, TrendingDown, X,
 } from "lucide-react";
+import { MonthPicker } from "@/components/ui/month-picker";
 import { toast } from "sonner";
-import type { Deposit, Credit, Payment, Expense } from "@/lib/types";
+import type { Deposit, Credit, Payment, Expense, ExpenseAllocation } from "@/lib/types";
 import { calculateAllSettlements, getSettlementSummary, type MemberSettlement } from "@/lib/calculations/engine";
 import { Link } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_authed/deposits")({
   component: DepositsPage,
 });
-
-type FilterMode = "month" | "date_range" | "all";
 
 function DepositsPage() {
   const { profile } = useAuth();
@@ -42,67 +41,72 @@ function DepositsPage() {
   const { data: payments } = useCollection<Payment>("payments");
   const { data: staff } = useCollection<Staff>("staff");
   const { data: ledgers } = useCollection<LedgerEntry>("ledgers");
+  const { data: allocations } = useCollection<ExpenseAllocation>("expense_allocations", [orderBy("createdAt", "desc")]);
 
-  // ────────────────────────────────────────────
-  // Filters
-  // ────────────────────────────────────────────
-  const [filterMonth, setFilterMonth] = useState(() => ymKey());
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterStatus, setFilterStatus] = useState<string>("all");
-  const [showFilters, setShowFilters] = useState(true);
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
 
-  // Sync ym with filterMonth
-  const currentYm = filterMonth;
+  // Pending filter state (what user is selecting)
+  const [pendingYear, setPendingYear] = useState<string>(String(currentYear));
+  const [pendingMonth, setPendingMonth] = useState<string>(String(currentMonth));
+  const [pendingDateFrom, setPendingDateFrom] = useState<string>("");
+  const [pendingDateTo, setPendingDateTo] = useState<string>("");
+  const [pendingUseDateRange, setPendingUseDateRange] = useState<boolean>(false);
+
+  // Applied filter state (what the table uses, only changes on Search click)
+  const [filterYear, setFilterYear] = useState<string>(String(currentYear));
+  const [filterMonth, setFilterMonth] = useState<string>(String(currentMonth));
+  const [filterDateFrom, setFilterDateFrom] = useState<string>("");
+  const [filterDateTo, setFilterDateTo] = useState<string>("");
+  const [useDateRange, setUseDateRange] = useState<boolean>(false);
+
+  // Generate year options
+  const yearOptions = useMemo(() => {
+    const years = new Set<string>();
+    years.add(String(currentYear));
+    return Array.from(years).sort((a, b) => Number(b) - Number(a));
+  }, [currentYear]);
+
+  const monthOptions = [
+    { value: "1", label: "January" }, { value: "2", label: "February" },
+    { value: "3", label: "March" }, { value: "4", label: "April" },
+    { value: "5", label: "May" }, { value: "6", label: "June" },
+    { value: "7", label: "July" }, { value: "8", label: "August" },
+    { value: "9", label: "September" }, { value: "10", label: "October" },
+    { value: "11", label: "November" }, { value: "12", label: "December" },
+  ];
+
+  const currentYm = useDateRange ? "" : `${filterYear}-${String(filterMonth).padStart(2, "0")}`;
+  const hasMonthSelected = !useDateRange && !!currentYm;
+
+  // Filter allocations for current month
+  const monthAllocations = useMemo(() => {
+    if (!allocations) return [];
+    if (hasMonthSelected) {
+      return allocations.filter((a) => (a as any).ym === currentYm);
+    }
+    return allocations.filter((a) => {
+      const exp = expenses.find((e) => e.id === a.expenseId);
+      return exp && exp.date >= filterDateFrom && exp.date <= filterDateTo;
+    });
+  }, [allocations, currentYm, hasMonthSelected, expenses, filterDateFrom, filterDateTo]);
 
   // Compute settlements with unified formula
   const settlements = useMemo(() => {
-    const monthExpenses = expenses.filter((e) => e.ym === currentYm);
+    const monthExpenses = expenses.filter((e) => hasMonthSelected ? e.ym === currentYm : e.date >= filterDateFrom && e.date <= filterDateTo);
     return calculateAllSettlements(
       members, currentYm, meals, bazar, deposits, credits,
       payments, ledgers, monthExpenses, rooms, staff,
+      [],
+      monthAllocations,
     );
-  }, [currentYm, members, meals, bazar, expenses, deposits, credits, payments, ledgers, rooms, staff]);
+  }, [currentYm, members, meals, bazar, expenses, deposits, credits, payments, ledgers, rooms, staff, hasMonthSelected, filterDateFrom, filterDateTo, monthAllocations]);
 
-  // ────────────────────────────────────────────
-  // Filter Logic
-  // ────────────────────────────────────────────
-  const filteredSettlements = useMemo(() => {
-    let result = [...settlements];
-
-    // Status filter
-    if (filterStatus === "receive") {
-      result = result.filter((s) => s.balance > 0);
-    } else if (filterStatus === "pay") {
-      result = result.filter((s) => s.balance < 0);
-    } else if (filterStatus === "settled") {
-      result = result.filter((s) => s.balance === 0);
-    }
-
-    // Search filter
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      result = result.filter((s) => {
-        const searchable = [
-          s.memberName,
-          s.settlementStatus,
-          s.contributions.bazarContribution.toString(),
-          s.charges.totalCharges.toString(),
-          s.balance.toString(),
-          s.depositSource || "",
-          s.creditReason || "",
-        ].join(" ").toLowerCase();
-        return searchable.includes(q);
-      });
-    }
-
-    // Sort: positive balance (receivable) first, then by amount descending
-    return result.sort((a, b) => b.balance - a.balance);
-  }, [settlements, filterStatus, searchQuery]);
-
-  // Members with positive balance (receivable)
+  // Filter by status
   const membersWithDeposits = useMemo(() => {
-    return filteredSettlements.filter((s) => s.balance > 0);
-  }, [filteredSettlements]);
+    return settlements.filter((s) => s.balance > 0).sort((a, b) => b.balance - a.balance);
+  }, [settlements]);
 
   // Summary stats
   const depositSummary = useMemo(() => {
@@ -112,35 +116,52 @@ function DepositsPage() {
     return { totalDeposit, totalContributions, totalCharges };
   }, [membersWithDeposits]);
 
-  // All settlements summary
-  const allSummary = useMemo(() => {
-    return getSettlementSummary(settlements);
-  }, [settlements]);
+  const allSummary = useMemo(() => getSettlementSummary(settlements), [settlements]);
 
-  const totalManualDeposits = deposits.filter((d) => d.ym === currentYm).reduce((s, d) => s + d.amount, 0);
-  const activeCount = members.filter((m) => m.active).length;
-
-  const resetFilters = () => {
-    setFilterMonth(ymKey());
-    setSearchQuery("");
-    setFilterStatus("all");
+  const applyFilters = () => {
+    setFilterYear(pendingYear);
+    setFilterMonth(pendingMonth);
+    setFilterDateFrom(pendingDateFrom);
+    setFilterDateTo(pendingDateTo);
+    setUseDateRange(pendingUseDateRange);
   };
 
-  const hasActiveFilters = filterMonth !== ymKey() || searchQuery.trim() !== "" || filterStatus !== "all";
+  const resetFilters = () => {
+    const y = String(currentYear);
+    const m = String(currentMonth);
+    setPendingYear(y);
+    setPendingMonth(m);
+    setPendingDateFrom("");
+    setPendingDateTo("");
+    setPendingUseDateRange(false);
+    setFilterYear(y);
+    setFilterMonth(m);
+    setFilterDateFrom("");
+    setFilterDateTo("");
+    setUseDateRange(false);
+  };
+
+  const hasFilterChanges =
+    pendingYear !== filterYear ||
+    pendingMonth !== filterMonth ||
+    pendingDateFrom !== filterDateFrom ||
+    pendingDateTo !== filterDateTo ||
+    pendingUseDateRange !== useDateRange;
+
+  const hasActiveFilters = useDateRange || filterYear !== String(currentYear) || filterMonth !== String(currentMonth);
+
+  const filterLabel = useDateRange
+    ? `${filterDateFrom || "Start"} to ${filterDateTo || "End"}`
+    : `${monthOptions.find((m) => m.value === filterMonth)?.label} ${filterYear}`;
 
   return (
     <div>
       <PageHeader
         title="Members To Receive From Mess"
-        description={`${currentYm} · ${membersWithDeposits.length} members with deposits totaling ${bdt(depositSummary.totalDeposit)}`}
+        description={`${currentYm || filterLabel} · ${membersWithDeposits.length} members totaling ${bdt(depositSummary.totalDeposit)}`}
         action={
           <div className="flex items-center gap-2">
-            <Input
-              type="month"
-              value={filterMonth}
-              onChange={(e) => setFilterMonth(e.target.value)}
-              className="w-40"
-            />
+            <MonthPicker value={currentYm || ymKey()} onChange={(v) => { setPendingYear(v.split("-")[0]); setPendingMonth(v.split("-")[1]); setFilterYear(v.split("-")[0]); setFilterMonth(v.split("-")[1]); setUseDateRange(false); }} />
           </div>
         }
       />
@@ -155,7 +176,6 @@ function DepositsPage() {
               <div className="text-sm text-muted-foreground">
                 Deposits are automatically calculated from the settlement engine.
                 When a member's Net Balance is positive, it means the mess owes them money.
-                This is their deposit amount. No manual deposit creation is needed.
               </div>
             </div>
           </div>
@@ -190,110 +210,85 @@ function DepositsPage() {
         </div>
 
         {/* ──────────────────────────────────────────── */}
-        {/* SEARCH + FILTER BAR */}
+        {/* FILTERS BAR (Like meals & bazar) */}
         {/* ──────────────────────────────────────────── */}
         <Card className="p-4">
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Search Input */}
-            <div className="relative flex-1 min-w-[200px]">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search by member name, amount, status..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-
-            {/* Quick Month Selector */}
-            <Input
-              type="month"
-              value={filterMonth}
-              onChange={(e) => setFilterMonth(e.target.value)}
-              className="w-44"
-            />
-
-            {/* Filter Toggle Button */}
-            <Button
-              variant={showFilters ? "default" : "outline"}
-              size="sm"
-              onClick={() => setShowFilters(!showFilters)}
-              className="gap-1.5"
-            >
-              <Filter className="h-4 w-4" />
-              Filters
-              {filterStatus !== "all" && (
-                <span className="ml-1 h-5 w-5 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center">
-                  1
-                </span>
-              )}
-            </Button>
-
-            {/* Reset Filters */}
+          <div className="flex items-center gap-2 mb-3">
+            <Filter className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium text-muted-foreground">Filters</span>
             {hasActiveFilters && (
-              <Button variant="ghost" size="sm" onClick={resetFilters} className="gap-1.5 text-muted-foreground">
-                <RotateCcw className="h-3.5 w-3.5" />
-                Reset
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={resetFilters}>
+                <X className="h-3 w-3 mr-1" />Clear
               </Button>
             )}
           </div>
 
-          {/* Expanded Filter Options */}
-          {showFilters && (
-            <div className="mt-4 pt-4 border-t space-y-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <Label className="text-sm font-medium whitespace-nowrap">Status:</Label>
-                <div className="flex gap-2">
-                  <Button
-                    variant={filterStatus === "all" ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setFilterStatus("all")}
-                  >
-                    All
-                  </Button>
-                  <Button
-                    variant={filterStatus === "receive" ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setFilterStatus("receive")}
-                    className="gap-1"
-                  >
-                    <TrendingUp className="h-3.5 w-3.5" />
-                    Receive
-                  </Button>
-                  <Button
-                    variant={filterStatus === "pay" ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setFilterStatus("pay")}
-                    className="gap-1"
-                  >
-                    <TrendingDown className="h-3.5 w-3.5" />
-                    Pay
-                  </Button>
-                  <Button
-                    variant={filterStatus === "settled" ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setFilterStatus("settled")}
-                  >
-                    Settled
-                  </Button>
-                </div>
-              </div>
-
-              {/* Active Filters Summary */}
-              {hasActiveFilters && (
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span className="font-medium">Active filters:</span>
-                  {filterMonth !== ymKey() && <Badge variant="secondary" className="text-xs">Month: {filterMonth}</Badge>}
-                  {filterStatus !== "all" && <Badge variant="secondary" className="text-xs capitalize">Status: {filterStatus}</Badge>}
-                  {searchQuery.trim() && <Badge variant="secondary" className="text-xs">Search: "{searchQuery}"</Badge>}
-                </div>
-              )}
+          <div className="flex flex-wrap gap-3 items-end">
+            {/* Filter mode toggle */}
+            <div className="space-y-1">
+              <Label className="text-xs">Mode</Label>
+              <Select value={pendingUseDateRange ? "range" : "month"} onValueChange={(v) => setPendingUseDateRange(v === "range")}>
+                <SelectTrigger className="w-32 h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="month">Month/Year</SelectItem>
+                  <SelectItem value="range">Date Range</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          )}
+
+            {!pendingUseDateRange ? (
+              <>
+                <div className="space-y-1">
+                  <Label className="text-xs">Month</Label>
+                  <Select value={pendingMonth} onValueChange={setPendingMonth}>
+                    <SelectTrigger className="w-36 h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {monthOptions.map((m) => (
+                        <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Year</Label>
+                  <Select value={pendingYear} onValueChange={setPendingYear}>
+                    <SelectTrigger className="w-28 h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {yearOptions.map((y) => (
+                        <SelectItem key={y} value={y}>{y}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  <Label className="text-xs">From</Label>
+                  <Input type="date" value={pendingDateFrom} onChange={(e) => setPendingDateFrom(e.target.value)} className="w-40 h-9" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">To</Label>
+                  <Input type="date" value={pendingDateTo} onChange={(e) => setPendingDateTo(e.target.value)} className="w-40 h-9" />
+                </div>
+              </>
+            )}
+
+            {/* Search / Apply Filter Button */}
+            <Button size="sm" className="h-9 px-4" onClick={applyFilters}>
+              <Search className="h-4 w-4 mr-1.5" />Search
+            </Button>
+          </div>
         </Card>
 
         {/* ──────────────────────────────────────────── */}
-        {/* DEPOSIT MEMBERS TABLE (ERP-Style) */}
+        {/* DEPOSIT MEMBERS TABLE */}
         {/* ──────────────────────────────────────────── */}
         <Card className="overflow-hidden">
           <div className="p-4 border-b bg-muted/30 flex items-center justify-between">
@@ -304,24 +299,18 @@ function DepositsPage() {
                 ({membersWithDeposits.length} {membersWithDeposits.length === 1 ? "member" : "members"})
               </span>
             </h3>
-            <span className="text-sm text-muted-foreground">{currentYm}</span>
+            <span className="text-sm text-muted-foreground">{filterLabel}</span>
           </div>
 
           {membersWithDeposits.length === 0 ? (
             <div className="p-12 text-center text-muted-foreground">
               <Wallet className="h-10 w-10 mx-auto opacity-40 mb-3" />
               <p className="font-medium">
-                {settlements.length === 0 ? "No data for this month" : "No members have deposits this month"}
-              </p>
-              <p className="text-sm mt-1">
-                {settlements.length === 0
-                  ? "Add members and expenses to see settlements."
-                  : "Try adjusting your filters or selecting a different month."}
+                {settlements.length === 0 ? "No data for this period" : "No members have deposits"}
               </p>
               {settlements.length > 0 && (
                 <Button variant="outline" size="sm" onClick={resetFilters} className="mt-4 gap-1.5">
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Clear Filters
+                  <RotateCcw className="h-3.5 w-3.5" />Clear Filters
                 </Button>
               )}
             </div>
@@ -384,20 +373,15 @@ function DepositsPage() {
           )}
         </Card>
 
-        {/* ──────────────────────────────────────────── */}
-        {/* ALL MEMBERS SETTLEMENT SUMMARY */}
-        {/* ──────────────────────────────────────────── */}
+        {/* All Members Settlement Summary */}
         <Card className="overflow-hidden">
           <div className="p-4 border-b bg-muted/30">
             <h3 className="font-semibold">All Members Settlement Summary</h3>
-            <p className="text-xs text-muted-foreground mt-1">
-              Complete settlement status for all active members in {currentYm}
-            </p>
+            <p className="text-xs text-muted-foreground mt-1">Complete settlement status for {filterLabel}</p>
           </div>
-
           {settlements.length === 0 ? (
             <div className="p-12 text-center text-muted-foreground">
-              <p className="font-medium">No data for this month</p>
+              <p className="font-medium">No data for this period</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -412,7 +396,7 @@ function DepositsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredSettlements.map((s) => (
+                  {settlements.map((s) => (
                     <tr key={s.memberId} className="border-t hover:bg-muted/30 transition-colors">
                       <td className="p-3">
                         <div className="flex items-center gap-2">
@@ -447,19 +431,6 @@ function DepositsPage() {
                     </tr>
                   ))}
                 </tbody>
-                <tfoot className="font-semibold bg-muted/30 border-t-2">
-                  <tr>
-                    <td className="p-3">Total ({filteredSettlements.length} members)</td>
-                    <td className="p-3 text-right text-destructive">{bdt(allSummary.totalMealCost)}</td>
-                    <td className="p-3 text-right text-primary">{bdt(allSummary.totalBazarPaid)}</td>
-                    <td className={`p-3 text-right ${allSummary.totalBalance >= 0 ? "text-primary" : "text-destructive"}`}>
-                      {bdt(allSummary.totalBalance)}
-                    </td>
-                    <td className="p-3 text-center text-xs">
-                      {allSummary.membersToReceive.length} receive · {allSummary.membersToPay.length} pay · {allSummary.settledMembers.length} settled
-                    </td>
-                  </tr>
-                </tfoot>
               </table>
             </div>
           )}

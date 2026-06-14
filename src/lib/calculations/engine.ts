@@ -562,33 +562,42 @@ export function calculateMemberCharges(
   _monthPayments: Payment[],
   previousDeposit: number = 0,
   previousCredit: number = 0,
+  monthAllocations: ExpenseAllocation[] = [],
 ): MemberCharges {
   const totalMeals = getMemberMealsCount(member.id, monthMeals);
   const mealCost = totalMeals * mealRate;
   const rentShare = getPerBedRent(member, rooms);
 
-  // Expense shares (allocation of each expense across subscribers)
-  const expenseShareBreakdown: Record<string, number> = {};
+  // Expense shares - prefer using persisted allocations if available
+  let expenseShareBreakdown: Record<string, number> = {};
   let expenseShares = 0;
 
-  monthExpenses.forEach((expense) => {
-    const serviceType = getServiceTypeForExpenseCategory(expense.category);
-    let memberShare = 0;
+  if (monthAllocations.length > 0) {
+    // Use persisted expense allocations (preferred method)
+    const allocResult = calculateMemberChargesFromAllocations(member.id, monthAllocations);
+    expenseShareBreakdown = allocResult.expenseShareBreakdown;
+    expenseShares = allocResult.expenseShares;
+  } else {
+    // Fallback: calculate on-the-fly from expenses
+    monthExpenses.forEach((expense) => {
+      const serviceType = getServiceTypeForExpenseCategory(expense.category);
+      let memberShare = 0;
 
-    if (serviceType) {
-      const subscribers = activeMembers.filter((m) => isMemberSubscribedToService(m, serviceType)).length || 1;
-      if (isMemberSubscribedToService(member, serviceType)) {
-        memberShare = (expense.amount || 0) / subscribers;
+      if (serviceType) {
+        const subscribers = activeMembers.filter((m) => isMemberSubscribedToService(m, serviceType)).length || 1;
+        if (isMemberSubscribedToService(member, serviceType)) {
+          memberShare = (expense.amount || 0) / subscribers;
+        }
+      } else {
+        memberShare = (expense.amount || 0) / (activeMembers.length || 1);
       }
-    } else {
-      memberShare = (expense.amount || 0) / (activeMembers.length || 1);
-    }
 
-    if (memberShare > 0) {
-      expenseShareBreakdown[expense.category] = (expenseShareBreakdown[expense.category] || 0) + memberShare;
-      expenseShares += memberShare;
-    }
-  });
+      if (memberShare > 0) {
+        expenseShareBreakdown[expense.category] = (expenseShareBreakdown[expense.category] || 0) + memberShare;
+        expenseShares += memberShare;
+      }
+    });
+  }
 
   // Staff share
   let staffShare = 0;
@@ -628,9 +637,33 @@ export function calculateMemberCharges(
       staff: staffShare,
       previousDue,
       previousCredit,
-      previousDeposit,
-    },
-  };
+        previousDeposit,
+      },
+    };
+  }
+
+/**
+ * Calculate member charges from expense allocations (preferred method)
+ * This uses the persisted expense_allocations collection for accurate tracking
+ * 
+ * CRITICAL: This is the correct way to calculate member charges for shared expenses.
+ * Each expense allocation represents a member's share of an expense.
+ */
+export function calculateMemberChargesFromAllocations(
+  memberId: string,
+  monthAllocations: ExpenseAllocation[],
+): { expenseShares: number; expenseShareBreakdown: Record<string, number> } {
+  const expenseShareBreakdown: Record<string, number> = {};
+  let expenseShares = 0;
+
+  monthAllocations
+    .filter((alloc) => alloc.memberId === memberId)
+    .forEach((alloc) => {
+      expenseShareBreakdown[alloc.category] = (expenseShareBreakdown[alloc.category] || 0) + (alloc.amount || 0);
+      expenseShares += alloc.amount || 0;
+    });
+
+  return { expenseShares, expenseShareBreakdown };
 }
 
 function getServiceTypeForExpenseCategory(category: ExpenseCategory): string | null {
@@ -706,6 +739,7 @@ export function calculateMemberSettlement(
   rooms: Room[] = [],
   staff: Staff[] = [],
   prevClosings: Array<{ month: string; memberId: string; deposit: number; credit: number }> = [],
+  monthAllocations: ExpenseAllocation[] = [],
 ): MemberSettlement {
   const monthMeals = mealEntries.filter((m) => m.ym === ym);
   const monthBazar = bazarEntries.filter((b) => b.ym === ym);
@@ -732,6 +766,7 @@ export function calculateMemberSettlement(
   );
 
   // Unified Charge Formula with carry forward
+  // Pass monthAllocations to use persisted allocations if available
   const charges = calculateMemberCharges(
     member,
     mealRate,
@@ -743,6 +778,7 @@ export function calculateMemberSettlement(
     monthPayments,
     previousDeposit,
     previousCredit,
+    monthAllocations,
   );
 
   // CORRECTED: Net Balance = Total Contributions - Total Charges
@@ -827,6 +863,7 @@ export function calculateAllSettlements(
   rooms: Room[] = [],
   staff: Staff[] = [],
   prevClosings: Array<{ month: string; memberId: string; deposit: number; credit: number }> = [],
+  monthAllocations: ExpenseAllocation[] = [],
 ): MemberSettlement[] {
   const activeMembers = members.filter((m) => m.active);
 
@@ -846,6 +883,7 @@ export function calculateAllSettlements(
         rooms,
         staff,
         prevClosings,
+        monthAllocations,
       )
     )
     .sort((a, b) => a.memberName.localeCompare(b.memberName));
@@ -893,6 +931,7 @@ export function computeMonthlySummary(
   ledgerEntries: LedgerEntry[] = [],
   monthExpenses: Expense[] = [],
   prevClosings: Array<{ month: string; memberId: string; deposit: number; credit: number }> = [],
+  monthAllocations: ExpenseAllocation[] = [],
 ): MonthlySummary {
   const monthMeals = meals.filter((m) => m.ym === ym);
   const monthBazar = bazar.filter((b) => b.ym === ym);
@@ -951,6 +990,7 @@ export function computeMonthlySummary(
     rooms,
     staff,
     prevClosings,
+    monthAllocations,
   );
 
   const settlementSummary = getSettlementSummary(settlements);
@@ -1476,6 +1516,7 @@ export function calculateExpenseAllocations(
         category: expense.category,
         amount: 0,
         subscribed: false,
+        ym: expense.ym,
         status: "pending",
         createdAt: Date.now(),
       };
@@ -1516,6 +1557,7 @@ export function calculateExpenseAllocations(
       category: expense.category,
       amount: Math.round(amount * 100) / 100,
       subscribed: true,
+      ym: expense.ym,
       status: "pending",
       paidAmount: 0,
       dueAmount: Math.round(amount * 100) / 100,

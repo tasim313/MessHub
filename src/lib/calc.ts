@@ -126,6 +126,7 @@ export function computeMonthly(
   rooms: Room[] = [],
   ledgerEntries: LedgerEntry[] = [],
   prevClosings: Array<{ month: string; memberId: string; deposit: number; credit: number }> = [],
+  monthAllocations: import("./types").ExpenseAllocation[] = [],
 ): MonthlySummary {
   const result = computeMonthlySummary(
     ym,
@@ -140,7 +141,8 @@ export function computeMonthly(
     rooms,
     ledgerEntries,
     [],
-    prevClosings
+    prevClosings,
+    monthAllocations
   );
 
   // Convert to legacy format for backward compatibility
