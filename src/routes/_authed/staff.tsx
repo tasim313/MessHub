@@ -39,6 +39,8 @@ import {
   ShieldCheck,
   Trash2,
   UsersRound,
+  Filter,
+  RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
@@ -81,6 +83,9 @@ function StaffPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Staff | null>(null);
   const [search, setSearch] = useState("");
+  const [filterRole, setFilterRole] = useState<string>("all");
+  const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [showFilters, setShowFilters] = useState(true);
   const [form, setForm] = useState<Omit<Staff, "id">>(blankStaff);
 
   const payroll = useMemo(() => {
@@ -102,11 +107,35 @@ function StaffPage() {
     );
   }, [staff]);
 
-  const filtered = staff.filter((item) => {
-    const haystack =
-      `${item.name} ${item.phone || ""} ${item.role} ${item.status}`.toLowerCase();
-    return !search || haystack.includes(search.toLowerCase());
-  });
+  const filtered = useMemo(() => {
+    let result = [...staff];
+
+    if (filterRole !== "all") {
+      result = result.filter((item) => item.role === filterRole);
+    }
+
+    if (filterStatus !== "all") {
+      result = result.filter((item) => item.status === filterStatus);
+    }
+
+    if (search.trim()) {
+      const q = search.toLowerCase().trim();
+      result = result.filter((item) => {
+        const haystack = `${item.name} ${item.phone || ""} ${item.role} ${item.status} ${item.salary} ${item.notes || ""}`.toLowerCase();
+        return haystack.includes(q);
+      });
+    }
+
+    return result;
+  }, [staff, filterRole, filterStatus, search]);
+
+  const resetFilters = () => {
+    setSearch("");
+    setFilterRole("all");
+    setFilterStatus("all");
+  };
+
+  const hasActiveFilters = search.trim() !== "" || filterRole !== "all" || filterStatus !== "all";
 
   const reset = () => {
     setEditing(null);
@@ -411,15 +440,57 @@ function StaffPage() {
             </div>
           </Card>
         </div>
-        <div className="relative max-w-md">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            className="pl-9"
-            placeholder="Search staff, role, status..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
+        <Card className="p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input className="pl-9" placeholder="Search staff by name, role, salary..." value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+            <Button variant={showFilters ? "default" : "outline"} size="sm" onClick={() => setShowFilters(!showFilters)} className="gap-1.5">
+              <Filter className="h-4 w-4" />Filters
+              {(filterRole !== "all" || filterStatus !== "all") && (
+                <span className="ml-1 h-5 w-5 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center">
+                  {[filterRole !== "all" ? 1 : 0, filterStatus !== "all" ? 1 : 0].reduce((a, b) => a + b, 0)}
+                </span>
+              )}
+            </Button>
+            {hasActiveFilters && (
+              <Button variant="ghost" size="sm" onClick={resetFilters} className="gap-1.5 text-muted-foreground">
+                <RotateCcw className="h-3.5 w-3.5" />Reset
+              </Button>
+            )}
+          </div>
+          {showFilters && (
+            <div className="mt-4 pt-4 border-t space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <Label className="text-sm font-medium whitespace-nowrap">Role:</Label>
+                <Select value={filterRole} onValueChange={setFilterRole}>
+                  <SelectTrigger className="w-44"><SelectValue placeholder="All Roles" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Roles</SelectItem>
+                    {ROLES.map((role) => <SelectItem key={role} value={role} className="capitalize">{role}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Label className="text-sm font-medium whitespace-nowrap ml-2">Status:</Label>
+                <Select value={filterStatus} onValueChange={setFilterStatus}>
+                  <SelectTrigger className="w-40"><SelectValue placeholder="All" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Status</SelectItem>
+                    {STATUSES.map((s) => <SelectItem key={s} value={s} className="capitalize">{s.replace("_", " ")}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              {hasActiveFilters && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span className="font-medium">Active:</span>
+                  {filterRole !== "all" && <Badge variant="secondary" className="text-xs capitalize">Role: {filterRole}</Badge>}
+                  {filterStatus !== "all" && <Badge variant="secondary" className="text-xs capitalize">Status: {filterStatus}</Badge>}
+                  {search.trim() && <Badge variant="secondary" className="text-xs">Search: "{search}"</Badge>}
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
         {filtered.length === 0 ? (
           <Card className="p-12 text-center text-muted-foreground">
             <UsersRound className="mx-auto mb-3 h-10 w-10 opacity-40" />

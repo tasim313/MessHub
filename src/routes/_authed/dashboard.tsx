@@ -19,7 +19,7 @@ import {
 import { computeMonthly } from "@/lib/calc";
 import { ymKey, bdt } from "@/lib/format";
 import { useMemo } from "react";
-import type { MonthlyClosing } from "@/lib/types";
+import type { MonthlyClosing, ExpenseAllocation } from "@/lib/types";
 import { useAuth } from "@/lib/auth-context";
 import {
   Utensils,
@@ -77,6 +77,7 @@ function DashboardPage() {
   const { data: staff } = useCollection<Staff>("staff");
   const { data: rooms } = useCollection<Room>("rooms");
   const { data: closings } = useCollection<MonthlyClosing>("monthly_closing", [orderBy("createdAt", "desc")]);
+  const { data: allocations } = useCollection<ExpenseAllocation>("expense_allocations", [orderBy("createdAt", "desc")]);
 
   const currentMember = useMemo(
     () =>
@@ -107,9 +108,15 @@ function DashboardPage() {
     }));
   }, [closings, ym]);
 
+  // Filter allocations for current month
+  const monthAllocations = useMemo(() => {
+    if (!allocations) return [];
+    return allocations.filter((a) => (a as any).ym === ym);
+  }, [allocations, ym]);
+
   const summary = useMemo(
-    () => computeMonthly(ym, members, meals, bazar, utilities, deposits, credits, payments, staff, rooms, [], prevClosings),
-    [ym, members, meals, bazar, utilities, deposits, credits, payments, staff, rooms, prevClosings],
+    () => computeMonthly(ym, members, meals, bazar, utilities, deposits, credits, payments, staff, rooms, [], prevClosings, monthAllocations),
+    [ym, members, meals, bazar, utilities, deposits, credits, payments, staff, rooms, prevClosings, monthAllocations],
   );
 
   // Use the correctly computed cashBalance from the engine

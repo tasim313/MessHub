@@ -24,12 +24,13 @@ import {
   type Staff,
   type Room,
 } from "@/lib/data";
-import type { Expense } from "@/lib/types";
+import type { Expense, ExpenseAllocation } from "@/lib/types";
 import { computeMonthly } from "@/lib/calc";
 import { ymKey, bdt } from "@/lib/format";
 import { calculateMonthlyClosing } from "@/lib/calculations/monthly-closing";
 import { calculateAllSettlements } from "@/lib/calculations/engine";
 import { generateRentChargesForMonth } from "@/lib/transaction";
+import { MonthPicker } from "@/components/ui/month-picker";
 import {
   Lock,
   Unlock,
@@ -59,6 +60,7 @@ function MonthlyClosingPage() {
     orderBy("createdAt", "desc"),
   ]);
   const { data: rentCharges } = useCollection<RentCharge>("rent_charges");
+  const { data: allocations } = useCollection<ExpenseAllocation>("expense_allocations", [orderBy("createdAt", "desc")]);
 
   const monthBazar = useMemo(() => bazar.filter((b) => b.ym === ym), [bazar, ym]);
   const monthExpenses = useMemo(() => expenses.filter((e) => e.ym === ym), [expenses, ym]);
@@ -83,10 +85,16 @@ function MonthlyClosingPage() {
     }));
   }, [closings, ym]);
 
+  // Filter allocations for current month
+  const monthAllocations = useMemo(() => {
+    if (!allocations) return [];
+    return allocations.filter((a) => (a as any).ym === ym);
+  }, [allocations, ym]);
+
   const monthSummary = useMemo(
     () =>
-      computeMonthly(ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms, [], prevClosings),
-    [ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms, prevClosings],
+      computeMonthly(ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms, [], prevClosings, monthAllocations),
+    [ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms, prevClosings, monthAllocations],
   );
 
   const existingClosing = useMemo(

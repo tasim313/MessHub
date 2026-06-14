@@ -12,6 +12,7 @@ import { useCollection, orderBy, type Member, type LedgerEntry, type MealEntry, 
 import type { Expense } from "@/lib/types";
 import { ymKey, bdt } from "@/lib/format";
 import { calculateMemberSettlement } from "@/lib/calculations/engine";
+import { MonthPicker } from "@/components/ui/month-picker";
 import { BookText, FileDown } from "lucide-react";
 import { exportToCSV } from "@/lib/export";
 import type { RentCharge, UtilityAllocation, StaffAllocation } from "@/lib/types";
@@ -85,7 +86,7 @@ function LedgerPage() {
         <div className="flex flex-wrap gap-4">
           <div className="space-y-2">
             <Label>Month</Label>
-            <Input type="month" value={ym} onChange={(e) => setYm(e.target.value)} className="w-44" />
+            <MonthPicker value={ym} onChange={setYm} />
           </div>
           <div className="space-y-2">
             <Label>Member</Label>

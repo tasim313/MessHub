@@ -249,6 +249,8 @@ export interface ExpenseAllocation {
   amount: number;
   percentage?: number;
   subscribed: boolean;
+  // Month for filtering
+  ym: string;
   // Payment tracking
   paidAmount?: number;
   dueAmount?: number;

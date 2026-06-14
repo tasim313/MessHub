@@ -27,6 +27,7 @@ import {
   Printer,
 } from "lucide-react";
 import { StatCard } from "@/components/app/StatCard";
+import { MonthPicker } from "@/components/ui/month-picker";
 import { Utensils, Wallet, TrendingUp, Receipt } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -252,12 +253,9 @@ function ReportsPage() {
       <div className="p-6 space-y-6">
         <Card className="p-4 max-w-xs">
           <Label>Month</Label>
-          <Input
-            type="month"
-            value={ym}
-            onChange={(e) => setYm(e.target.value)}
-            className="mt-1.5"
-          />
+          <div className="mt-1.5">
+            <MonthPicker value={ym} onChange={setYm} />
+          </div>
         </Card>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
