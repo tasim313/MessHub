@@ -259,7 +259,7 @@ export async function getMemberAdvancesWithHistory(
 // ============================================================================
 
 /**
- * Get total outstanding advance balance for a member (how much mess owes them)
+ * Get total outstanding advance balance for a member (how much other members owe them)
  */
 export async function getMemberOutstandingAdvance(memberId: string): Promise<number> {
   const q = query(
@@ -274,7 +274,7 @@ export async function getMemberOutstandingAdvance(memberId: string): Promise<num
 }
 
 /**
- * Get all outstanding advances (money the mess owes to all members)
+ * Get all outstanding advances (money other members owe to advance-givers)
  */
 export async function getAllOutstandingAdvances(): Promise<Advance[]> {
   const q = query(

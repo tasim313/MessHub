@@ -248,7 +248,8 @@ describe("Meal Rate Calculation", () => {
     const result = calculateMealRate(bazar, meals, "2024-01");
     expect(result.totalBazar).toBe(1000);
     expect(result.totalMeals).toBe(3);
-    expect(result.mealRate).toBeCloseTo(1000 / 3, 5);
+    // mealRate is now rounded to 2 decimal places
+    expect(result.mealRate).toBeCloseTo(Math.round((1000 / 3) * 100) / 100, 2);
   });
 
   it("should handle guest meals in calculation", () => {
@@ -260,7 +261,8 @@ describe("Meal Rate Calculation", () => {
 
     const result = calculateMealRate(bazar, meals, "2024-01");
     expect(result.totalMeals).toBe(7);
-    expect(result.mealRate).toBeCloseTo(900 / 7, 5);
+    // mealRate is now rounded to 2 decimal places
+    expect(result.mealRate).toBeCloseTo(Math.round((900 / 7) * 100) / 100, 2);
   });
 });
 
@@ -281,18 +283,18 @@ describe("Member Settlement Calculation", () => {
 
     const settlement = calculateMemberSettlement(member, "2024-01", meals, bazar, deposits, credits, payments);
 
-    // Meal rate = 5000 / 3 = 1666.67
+    // Meal rate = 5000 / 3 = 1666.67 (rounded to 2 decimal places)
     // Meal cost = 3 * 1666.67 = 5000
     // Bazar paid = 5000 (this is the contribution)
     // Total Contributions = bazar(5000) + expenseContributions(0) + paymentsMade(0) = 5000
     // Total charges = mealCost(5000) + 0+0+0+0+0(preCredit)-0(preDeposit) = 5000
     // Balance = 5000 - 5000 = 0 (Settled!)
-    expect(settlement.mealRate).toBeCloseTo(5000 / 3, 2);
+    expect(settlement.mealRate).toBeCloseTo(Math.round((5000 / 3) * 100) / 100, 2);
     expect(settlement.mealCost).toBeCloseTo(5000, 0);
     expect(settlement.totalBazarPaid).toBe(5000);
     expect(settlement.contributions.totalContribution).toBe(5000);
     expect(settlement.charges.totalCharges).toBeCloseTo(5000, 0);
-    expect(settlement.balance).toBe(0);
+    expect(settlement.balance).toBeCloseTo(0, 0);
     expect(settlement.settlementStatus).toBe("settled");
     expect(settlement.totalDeposit).toBe(0);
     expect(settlement.totalCredit).toBe(0);
@@ -459,15 +461,15 @@ describe("Member Settlement Calculation", () => {
       [], [], [member], [room], [],
     );
 
-    // Meal rate = 2000 / 6 = 333.33
-    // Meal cost = 2000
+    // Meal rate = 2000 / 6 = 333.33 (rounded to 2 decimal places)
+    // Meal cost = 6 * 333.33 = 2000
     // Rent share = 5000
     // Total Charges = 2000 + 5000 = 7000
     // Total Contributions = 2000 (bazar)
     // Balance = 2000 - 7000 = -5000 (member owes money)
-    expect(settlement.balance).toBe(-5000);
-    expect(settlement.payableAmount).toBe(5000);
-    expect(settlement.totalCredit).toBe(5000);
+    expect(settlement.balance).toBeCloseTo(-5000, 0);
+    expect(settlement.payableAmount).toBeCloseTo(5000, 0);
+    expect(settlement.totalCredit).toBeCloseTo(5000, 0);
     expect(settlement.totalDeposit).toBe(0);
     expect(settlement.settlementStatus).toBe("pay");
   });
@@ -560,6 +562,8 @@ describe("Multiple Members Settlement", () => {
     expect(jamal.totalMeals).toBe(3);
     expect(jamal.mealCost).toBeCloseTo(10000, 0);
     expect(jamal.totalBazarPaid).toBe(10000);
+    // Due to rounding, balance might be very close to 0 but not exactly 0
+    expect(jamal.balance).toBeCloseTo(0, 0);
     expect(jamal.settlementStatus).toBe("settled");
     expect(jamal.totalDeposit).toBe(0);
     expect(jamal.totalCredit).toBe(0);

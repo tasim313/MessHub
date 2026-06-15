@@ -175,7 +175,7 @@ function DepositsPage() {
               <div className="font-semibold">Auto-Computed from Settlement</div>
               <div className="text-sm text-muted-foreground">
                 Deposits are automatically calculated from the settlement engine.
-                When a member's Net Balance is positive, it means the mess owes them money.
+                When a member's Net Balance is positive, it means they have overpaid and the excess is held as a deposit for them.
               </div>
             </div>
           </div>

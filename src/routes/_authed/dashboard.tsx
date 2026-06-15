@@ -9,7 +9,7 @@ import {
   type Member,
   type MealEntry,
   type Bazar,
-  type Utility,
+
   type Deposit,
   type Credit,
   type Payment,
@@ -19,7 +19,8 @@ import {
 import { computeMonthly } from "@/lib/calc";
 import { ymKey, bdt } from "@/lib/format";
 import { useMemo } from "react";
-import type { MonthlyClosing, ExpenseAllocation } from "@/lib/types";
+import { EXPENSE_CATEGORY_LABELS } from "@/lib/types";
+import type { MonthlyClosing, ExpenseAllocation, Expense, Advance, AdvanceRecovery } from "@/lib/types";
 import { useAuth } from "@/lib/auth-context";
 import {
   Utensils,
@@ -70,7 +71,7 @@ function DashboardPage() {
   const { data: members } = useCollection<Member>("members");
   const { data: meals } = useCollection<MealEntry>("meals");
   const { data: bazar } = useCollection<Bazar>("bazar", [orderBy("createdAt", "desc")]);
-  const { data: utilities } = useCollection<Utility>("utilities");
+  const { data: expenses } = useCollection<Expense>("expenses");
   const { data: deposits } = useCollection<Deposit>("deposits");
   const { data: credits } = useCollection<Credit>("credits");
   const { data: payments } = useCollection<Payment>("payments");
@@ -78,6 +79,8 @@ function DashboardPage() {
   const { data: rooms } = useCollection<Room>("rooms");
   const { data: closings } = useCollection<MonthlyClosing>("monthly_closing", [orderBy("createdAt", "desc")]);
   const { data: allocations } = useCollection<ExpenseAllocation>("expense_allocations", [orderBy("createdAt", "desc")]);
+  const { data: advances } = useCollection<Advance>("advances");
+  const { data: advanceRecoveries } = useCollection<AdvanceRecovery>("advance_recoveries");
 
   const currentMember = useMemo(
     () =>
@@ -115,8 +118,42 @@ function DashboardPage() {
   }, [allocations, ym]);
 
   const summary = useMemo(
-    () => computeMonthly(ym, members, meals, bazar, utilities, deposits, credits, payments, staff, rooms, [], prevClosings, monthAllocations),
-    [ym, members, meals, bazar, utilities, deposits, credits, payments, staff, rooms, prevClosings, monthAllocations],
+    () =>
+      computeMonthly(
+        ym,
+        members,
+        meals,
+        bazar,
+        expenses,
+        deposits,
+        credits,
+        payments,
+        staff,
+        rooms,
+        [],
+        prevClosings,
+        monthAllocations,
+        advances,
+        advanceRecoveries,
+        closings,
+      ),
+    [
+      ym,
+      members,
+      meals,
+      bazar,
+      expenses,
+      deposits,
+      credits,
+      payments,
+      staff,
+      rooms,
+      prevClosings,
+      monthAllocations,
+      advances,
+      advanceRecoveries,
+      closings,
+    ],
   );
 
   // Use the correctly computed cashBalance from the engine
@@ -162,11 +199,12 @@ function DashboardPage() {
 
   const utilityTrend = useMemo(() => {
     const byType: Record<string, number> = {};
-    utilities.filter((u) => u.ym === ym).forEach((u) => {
-      byType[u.type] = (byType[u.type] || 0) + u.amount;
+    expenses.filter((e) => e.ym === ym).forEach((e) => {
+      const label = EXPENSE_CATEGORY_LABELS[e.category] || e.category;
+      byType[label] = (byType[label] || 0) + e.amount;
     });
-    return Object.entries(byType).map(([type, amount]) => ({ name: type, value: amount }));
-  }, [utilities, ym]);
+    return Object.entries(byType).map(([name, value]) => ({ name, value }));
+  }, [expenses, ym]);
 
   const activeCount = members.filter((m) => m.active).length;
   const totalBeds = rooms.reduce((sum, r) => sum + (r.totalBeds || 0), 0);
@@ -258,36 +296,36 @@ function DashboardPage() {
           </div>
         )}
 
-        {/* KPI Row 2b - Deposit Liability & Credit Receivable */}
+        {/* KPI Row 2b - Member Overpayment & Underpayment */}
         {isOwnerOrManager && (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
-              label="Total Deposit Liability"
+              label="Members Overpaid"
               value={bdt(summary.settlementSummary.totalReceivable)}
               icon={PiggyBank}
               tone="primary"
-              hint="Money mess must return"
+              hint="Held as member deposits"
             />
             <StatCard
-              label="Total Credit Receivable"
+              label="Members Underpaid"
               value={bdt(summary.settlementSummary.totalPayable)}
               icon={ArrowDownRight}
               tone="danger"
-              hint="Money members must pay"
+              hint="Outstanding from members"
             />
             <StatCard
-              label="Members To Receive"
+              label="Members With Deposits"
               value={String(summary.settlementSummary.membersToReceive.length)}
               icon={Users}
               tone="primary"
-              hint="Mess owes them"
+              hint="Credit balance held for them"
             />
             <StatCard
-              label="Members Who Owe"
+              label="Members With Dues"
               value={String(summary.settlementSummary.membersToPay.length)}
               icon={Users}
               tone="danger"
-              hint="They owe mess"
+              hint="Still need to pay"
             />
           </div>
         )}

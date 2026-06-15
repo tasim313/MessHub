@@ -28,14 +28,17 @@ import type { Expense, ExpenseAllocation } from "@/lib/types";
 import { computeMonthly } from "@/lib/calc";
 import { ymKey, bdt } from "@/lib/format";
 import { calculateMonthlyClosing } from "@/lib/calculations/monthly-closing";
-import { calculateAllSettlements } from "@/lib/calculations/engine";
+import { calculateAllSettlements, calculateMemberSettlement } from "@/lib/calculations/engine";
+import { calculateMemberToMemberSettlements, consolidateSettlements } from "@/lib/financial-engine";
 import { generateRentChargesForMonth } from "@/lib/transaction";
+import { cleanupAllDuplicateCharges } from "@/lib/duplicate-check";
 import { MonthPicker } from "@/components/ui/month-picker";
 import {
   Lock,
   Unlock,
   CheckCircle2,
   Plus,
+  ArrowRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { MonthlyClosing, RentCharge, Deposit, Credit, Payment } from "@/lib/types";
@@ -142,24 +145,86 @@ function MonthlyClosingPage() {
     }
   };
 
-  // Build member breakdown for carry forward
-  const memberBreakdown = useMemo(() => {
-    const breakdown: Record<string, { deposit: number; credit: number; balance: number; totalCharges: number; totalContributions: number }> = {};
-    monthSummary.perMember.forEach((p) => {
-      breakdown[p.memberId] = {
-        deposit: p.deposited,
-        credit: p.credited,
-        balance: p.balance,
-        totalCharges: p.totalCharges,
-        totalContributions: p.totalContributions,
-      };
-    });
-    return breakdown;
-  }, [monthSummary]);
+  // Build member breakdown for carry forward with detailed settlement reasons
+   const memberBreakdown = useMemo(() => {
+     const breakdown: Record<string, {
+       deposit: number;
+       credit: number;
+       balance: number;
+       totalCharges: number;
+       totalContributions: number;
+       settlementStatus: "pay" | "receive" | "settled";
+       payableAmount: number;
+       receivableAmount: number;
+       creditReason: string | undefined;
+       depositSource: string | undefined;
+       // Charge breakdown
+       mealCost: number;
+       rentShare: number;
+       staffShare: number;
+       expenseShares: Record<string, number>;
+       // Contribution breakdown
+       bazarContribution: number;
+       paymentsMade: number;
+       expenseContributions: number;
+     }> = {};
+     monthSummary.perMember.forEach((p) => {
+       breakdown[p.memberId] = {
+         deposit: p.deposited,
+         credit: p.credited,
+         balance: p.balance,
+         totalCharges: p.totalCharges,
+         totalContributions: p.totalContributions,
+         settlementStatus: p.settlementStatus,
+         payableAmount: p.payableAmount,
+         receivableAmount: p.receivableAmount,
+         creditReason: p.creditReason,
+         depositSource: p.depositSource,
+         mealCost: p.mealCost,
+         rentShare: p.rentShare,
+         staffShare: p.staffShare,
+         expenseShares: p.expenseShares,
+         bazarContribution: p.bazarContribution,
+         paymentsMade: p.paymentsMade || 0,
+          expenseContributions: Object.values(p.expenseContributions || {}).reduce((sum, v) => sum + v, 0),
+        };
+     });
+     return breakdown;
+   }, [monthSummary]);
 
   const handleClose = async () => {
     if (!profile) return;
     try {
+      // Step 1: Clean up any duplicate charges before closing
+      const allCategories = [
+        "meal", "rent", "staff",
+        ...Object.keys(monthExpenses.reduce((acc: Record<string, boolean>, e) => {
+          acc[e.category] = true;
+          return acc;
+        }, {} as Record<string, boolean>))
+      ];
+      const cleanupResult = await cleanupAllDuplicateCharges(ym, allCategories);
+      if (cleanupResult.totalDeleted > 0) {
+        toast.info(`Cleaned ${cleanupResult.totalDeleted} duplicate charges: ${Object.entries(cleanupResult.details).map(([cat, count]) => `${cat}: ${count}`).join(", ")}`);
+
+        // Log the cleanup to activity_logs for audit trail
+        await addDocTo("activity_logs", {
+          type: "financial",
+          entity: "ledgers",
+          entityId: ym,
+          action: "duplicate_cleanup",
+          actorUid: profile.uid,
+          actorName: profile.name,
+          actorRole: profile.role,
+          message: `Monthly closing (${ym}): Cleaned ${cleanupResult.totalDeleted} duplicate ledger charge(s). Breakdown: ${Object.entries(cleanupResult.details).map(([cat, count]) => `${cat}: ${count}`).join(", ")}`,
+          meta: {
+            month: ym,
+            totalDeleted: cleanupResult.totalDeleted,
+            details: cleanupResult.details,
+          },
+        });
+      }
+
       const closePayload = {
         month: ym,
         year: parseInt(ym.split("-")[0], 10),
@@ -226,6 +291,19 @@ function MonthlyClosingPage() {
     });
     return Object.entries(byCat).sort((a, b) => b[1] - a[1]);
   }, [monthExpenses]);
+
+  // Member-to-member settlements (who owes whom and why)
+  const activeMembers = useMemo(() => members.filter((m) => m.active), [members]);
+  const memberToMemberSettlements = useMemo(() => {
+    const raw = calculateMemberToMemberSettlements(monthExpenses, monthBazar, activeMembers, ym);
+    return consolidateSettlements(raw);
+  }, [monthExpenses, monthBazar, activeMembers, ym]);
+
+  // Total settled amount
+  const totalSettlementAmount = useMemo(
+    () => memberToMemberSettlements.reduce((s, st) => s + st.amount, 0),
+    [memberToMemberSettlements],
+  );
 
   return (
     <div>
@@ -537,9 +615,9 @@ function MonthlyClosingPage() {
                               "Settled"}
                            </span>
                          </td>
-                         <td className="p-3 text-xs text-muted-foreground max-w-[200px] truncate" title={reason || ""}>
-                           {reason || "—"}
-                         </td>
+                         <td className="p-3 text-xs text-muted-foreground whitespace-normal break-words" style={{ maxWidth: "300px" }} title={reason || ""}>
+                            {reason || "—"}
+                          </td>
                          <td className="p-3 text-right tabular-nums text-xs">
                            <span className="text-muted-foreground">
                              D: {bdt(p.carryForwardDeposit)} C: {bdt(p.carryForwardCredit)}
@@ -549,11 +627,200 @@ function MonthlyClosingPage() {
                      );
                    })}
                  </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-      </div>
+               </table>
+             </div>
+           )}
+         </Card>
+
+         {/* Settlement Details - Shows why each member owes or is owed */}
+         {monthSummary.perMember.length > 0 && (
+           <Card className="p-5">
+             <h3 className="font-semibold mb-4">Settlement Details — {ym}</h3>
+             <div className="space-y-4">
+               {monthSummary.perMember.map((p) => (
+                 <div key={p.memberId} className="border rounded-lg p-4">
+                   <div className="font-medium text-lg mb-2">{p.memberName}</div>
+                   <div className="grid gap-2 md:grid-cols-2 text-sm">
+                     {/* Charges Section */}
+                     <div className="bg-destructive/5 p-3 rounded">
+                       <div className="font-semibold text-destructive mb-1">Charges (Money Owed)</div>
+                       <div className="space-y-1">
+                         {p.mealCost > 0 && (
+                           <div className="flex justify-between">
+                             <span>Meal Cost:</span>
+                             <span className="font-medium">{bdt(p.mealCost)}</span>
+                           </div>
+                         )}
+                         {p.rentShare > 0 && (
+                           <div className="flex justify-between">
+                             <span>Rent Share:</span>
+                             <span className="font-medium">{bdt(p.rentShare)}</span>
+                           </div>
+                         )}
+                         {p.staffShare > 0 && (
+                           <div className="flex justify-between">
+                             <span>Staff Share:</span>
+                             <span className="font-medium">{bdt(p.staffShare)}</span>
+                           </div>
+                         )}
+                         {p.previousDue > 0 && (
+                           <div className="flex justify-between">
+                             <span>Previous Due:</span>
+                             <span className="font-medium">{bdt(p.previousDue)}</span>
+                           </div>
+                         )}
+                         {p.previousCredit > 0 && (
+                           <div className="flex justify-between">
+                             <span>Previous Credit:</span>
+                             <span className="font-medium">{bdt(p.previousCredit)}</span>
+                           </div>
+                         )}
+                         {Object.entries(p.expenseShares).filter(([_, amount]) => amount > 0).map(([cat, amount]) => (
+                           <div key={cat} className="flex justify-between">
+                             <span>{cat.replace(/_/g, " ")}:</span>
+                             <span className="font-medium">{bdt(amount)}</span>
+                           </div>
+                         ))}
+                         <div className="flex justify-between font-bold border-t pt-1 mt-1">
+                           <span>Total Charges:</span>
+                           <span>{bdt(p.totalCharges)}</span>
+                         </div>
+                       </div>
+                     </div>
+
+                     {/* Contributions Section */}
+                     <div className="bg-primary/5 p-3 rounded">
+                       <div className="font-semibold text-primary mb-1">Contributions (Money Paid)</div>
+                       <div className="space-y-1">
+                         {p.bazarContribution > 0 && (
+                           <div className="flex justify-between">
+                             <span>Bazar Paid:</span>
+                             <span className="font-medium">{bdt(p.bazarContribution)}</span>
+                           </div>
+                         )}
+                         {p.paymentsMade > 0 && (
+                           <div className="flex justify-between">
+                             <span>Payments Made:</span>
+                             <span className="font-medium">{bdt(p.paymentsMade)}</span>
+                           </div>
+                         )}
+                         {Object.values(p.expenseContributions || {}).reduce((sum, v) => sum + v, 0) > 0 && (
+                           <div className="flex justify-between">
+                             <span>Expense Contributions:</span>
+                             <span className="font-medium">{bdt(Object.values(p.expenseContributions || {}).reduce((sum, v) => sum + v, 0))}</span>
+                           </div>
+                         )}
+                         <div className="flex justify-between font-bold border-t pt-1 mt-1">
+                           <span>Total Contributions:</span>
+                           <span>{bdt(p.totalContributions)}</span>
+                         </div>
+                       </div>
+                     </div>
+                   </div>
+
+                   {/* Settlement Reason */}
+                   <div className="mt-3 p-3 bg-muted/30 rounded">
+                     <div className="font-semibold mb-1">
+                       {p.balance >= 0 ? "Deposit (Excess held for member)" : "Credit (Outstanding from member)"}
+                     </div>
+                     <div className="text-sm whitespace-normal break-words">
+                       {p.balance >= 0 ? p.depositSource : p.creditReason || "—"}
+                     </div>
+                   </div>
+                 </div>
+               ))}
+             </div>
+         </Card>
+         )}
+
+         {/* ──────────────────────────────────────────── */}
+         {/* MEMBER-TO-MEMBER SETTLEMENTS TABLE */}
+         {/* Clear display of who owes whom and why */}
+         {/* ──────────────────────────────────────────── */}
+         {memberToMemberSettlements.length > 0 && (
+           <Card className="p-5">
+             <div className="flex items-center justify-between mb-4">
+               <div>
+                 <h3 className="font-semibold text-lg">Who Owes Whom — {ym}</h3>
+                 <p className="text-sm text-muted-foreground mt-1">
+                   Money flows between members only. The mess/software never gives or receives money.
+                 </p>
+               </div>
+               <div className="text-right">
+                 <div className="text-xs text-muted-foreground">Total Settlements</div>
+                 <div className="text-lg font-bold text-primary">{bdt(totalSettlementAmount)}</div>
+                 <div className="text-xs text-muted-foreground">{memberToMemberSettlements.length} transfers</div>
+               </div>
+             </div>
+             <div className="overflow-x-auto">
+               <table className="w-full text-sm">
+                 <thead className="text-xs uppercase text-muted-foreground bg-muted/50">
+                   <tr>
+                     <th className="text-left p-3 font-medium">Who Pays</th>
+                     <th className="text-center p-3 font-medium"></th>
+                     <th className="text-left p-3 font-medium">Who Receives</th>
+                     <th className="text-right p-3 font-medium">Amount</th>
+                     <th className="text-left p-3 font-medium">Reason</th>
+                   </tr>
+                 </thead>
+                 <tbody>
+                   {memberToMemberSettlements.map((st, i) => (
+                     <tr key={`${st.fromMemberId}-${st.toMemberId}-${i}`} className="border-t hover:bg-muted/30 transition-colors">
+                       <td className="p-3">
+                         <div className="flex items-center gap-2">
+                           <span className="h-7 w-7 rounded-full bg-destructive/10 flex items-center justify-center text-xs font-bold text-destructive">
+                             {st.fromMemberName[0]}
+                           </span>
+                           <span className="font-medium">{st.fromMemberName}</span>
+                         </div>
+                       </td>
+                       <td className="p-3 text-center">
+                         <span className="inline-flex items-center gap-1 text-muted-foreground">
+                           pays <ArrowRight className="h-3.5 w-3.5" />
+                         </span>
+                       </td>
+                       <td className="p-3">
+                         <div className="flex items-center gap-2">
+                           <span className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold text-primary">
+                             {st.toMemberName[0]}
+                           </span>
+                           <span className="font-medium">{st.toMemberName}</span>
+                         </div>
+                       </td>
+                       <td className="p-3 text-right tabular-nums font-bold text-primary">{bdt(st.amount)}</td>
+                       <td className="p-3 text-xs text-muted-foreground max-w-[300px] whitespace-normal break-words">
+                         {st.reason}
+                       </td>
+                     </tr>
+                   ))}
+                 </tbody>
+                 <tfoot className="font-semibold bg-muted/30">
+                   <tr className="border-t-2">
+                     <td colSpan={3} className="p-3">Total</td>
+                     <td className="p-3 text-right text-primary">{bdt(totalSettlementAmount)}</td>
+                     <td className="p-3"></td>
+                   </tr>
+                 </tfoot>
+               </table>
+             </div>
+             <div className="mt-4 p-3 bg-primary/5 rounded-lg">
+               <p className="text-xs text-muted-foreground text-center">
+                 The mess (software) is only an accounting platform that tracks these member-to-member obligations.
+                 No money is held, received, or paid by the mess itself.
+               </p>
+             </div>
+           </Card>
+         )}
+
+         {memberToMemberSettlements.length === 0 && monthSummary.perMember.length > 0 && (
+           <Card className="p-5">
+             <h3 className="font-semibold mb-2">Who Owes Whom — {ym}</h3>
+             <p className="text-sm text-muted-foreground text-center py-6">
+               All members are settled. No member-to-member transfers needed.
+             </p>
+           </Card>
+         )}
+       </div>
     </div>
   );
 }

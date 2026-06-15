@@ -22,19 +22,33 @@ export async function checkRentChargeExists(memberId: string, month: string): Pr
 }
 
 /**
- * Check if a ledger charge entry already exists for a member in a given month and category.
+ * Check if a ledger charge entry already exists for a member in a given month, category, and date.
+ * This prevents duplicate charges for the same user, month, and date combination.
  * Uses a simple memberId-only query to avoid composite index requirements,
- * then filters client-side by month, transactionType, and category.
+ * then filters client-side by month, transactionType, category, and date.
  */
-export async function checkLedgerChargeExists(memberId: string, month: string, category: string): Promise<boolean> {
+export async function checkLedgerChargeExists(
+  memberId: string,
+  month: string,
+  category: string,
+  date?: string,
+): Promise<boolean> {
   const q = query(
     collection(db, "ledgers"),
     where("memberId", "==", memberId),
   );
   const snap = await getDocs(q);
-  return snap.docs.some(d => {
+  return snap.docs.some((d) => {
     const data = d.data();
-    return data.ym === month && isChargeType(data.transactionType) && data.category === category;
+    // Check month, transactionType, and category
+    if (data.ym !== month || !isChargeType(data.transactionType) || data.category !== category) {
+      return false;
+    }
+    // If date is provided, also check date match
+    if (date && data.date !== date) {
+      return false;
+    }
+    return true;
   });
 }
 
@@ -42,19 +56,32 @@ export async function checkLedgerChargeExists(memberId: string, month: string, c
  * Find duplicate charge entries for a member in a given month and category.
  * Returns the IDs of extra entries (keeping the first one by createdAt, marking others as duplicates).
  */
-export async function findDuplicateLedgerCharges(memberId: string, month: string, category: string): Promise<string[]> {
+export async function findDuplicateLedgerCharges(
+  memberId: string,
+  month: string,
+  category: string,
+  date?: string,
+): Promise<string[]> {
   const q = query(
     collection(db, "ledgers"),
     where("memberId", "==", memberId),
   );
   const snap = await getDocs(q);
   const matches = snap.docs
-    .filter(d => {
+    .filter((d) => {
       const data = d.data();
-      return data.ym === month && isChargeType(data.transactionType) && data.category === category;
+      // Check month, transactionType, and category
+      if (data.ym !== month || !isChargeType(data.transactionType) || data.category !== category) {
+        return false;
+      }
+      // If date is provided, also check date match
+      if (date && data.date !== date) {
+        return false;
+      }
+      return true;
     })
     .sort((a, b) => ((a.data().createdAt || 0) - (b.data().createdAt || 0)));
-  const docIds = matches.map(d => d.id);
+  const docIds = matches.map((d) => d.id);
   if (docIds.length <= 1) return [];
   return docIds.slice(1);
 }
@@ -63,9 +90,14 @@ export async function findDuplicateLedgerCharges(memberId: string, month: string
  * Delete duplicate charge entries for a member in a given month and category.
  * Keeps the oldest entry (by createdAt) and deletes the rest.
  */
-export async function deleteDuplicateCharges(memberId: string, month: string, category: string): Promise<number> {
-  const duplicateIds = await findDuplicateLedgerCharges(memberId, month, category);
-  const deletePromises = duplicateIds.map(id => deleteDoc(doc(db, "ledgers", id)));
+export async function deleteDuplicateCharges(
+  memberId: string,
+  month: string,
+  category: string,
+  date?: string,
+): Promise<number> {
+  const duplicateIds = await findDuplicateLedgerCharges(memberId, month, category, date);
+  const deletePromises = duplicateIds.map((id) => deleteDoc(doc(db, "ledgers", id)));
   await Promise.all(deletePromises);
   return duplicateIds.length;
 }
@@ -79,6 +111,7 @@ export async function getUniqueLedgerCharge(
   memberId: string,
   month: string,
   category: string,
+  date?: string,
 ): Promise<{ id: string; amount: number } | null> {
   const q = query(
     collection(db, "ledgers"),
@@ -86,9 +119,17 @@ export async function getUniqueLedgerCharge(
   );
   const snap = await getDocs(q);
   const matches = snap.docs
-    .filter(d => {
+    .filter((d) => {
       const data = d.data();
-      return data.ym === month && isChargeType(data.transactionType) && data.category === category;
+      // Check month, transactionType, and category
+      if (data.ym !== month || !isChargeType(data.transactionType) || data.category !== category) {
+        return false;
+      }
+      // If date is provided, also check date match
+      if (date && data.date !== date) {
+        return false;
+      }
+      return true;
     })
     .sort((a, b) => ((a.data().createdAt || 0) - (b.data().createdAt || 0)));
   if (matches.length === 0) return null;
@@ -116,7 +157,7 @@ export async function checkUtilityAllocationExists(utilityId: string, memberId: 
   const q = query(
     collection(db, "utility_allocations"),
     where("utilityId", "==", utilityId),
-    where("memberId", "==", memberId)
+    where("memberId", "==", memberId),
   );
   const snap = await getDocs(q);
   return !snap.empty;
@@ -131,7 +172,7 @@ export async function checkStaffAllocationExists(staffId: string, memberId: stri
     collection(db, "staff_allocations"),
     where("staffId", "==", staffId),
     where("memberId", "==", memberId),
-    where("month", "==", month)
+    where("month", "==", month),
   );
   const snap = await getDocs(q);
   return !snap.empty;
@@ -145,7 +186,7 @@ export async function checkRoomExists(buildingName: string, roomNo: string): Pro
   const q = query(
     collection(db, "rooms"),
     where("buildingName", "==", buildingName),
-    where("roomNo", "==", roomNo)
+    where("roomNo", "==", roomNo),
   );
   const snap = await getDocs(q);
   return !snap.empty;
@@ -160,7 +201,7 @@ export async function checkBedOccupied(roomId: string, bedNo: string): Promise<b
     collection(db, "members"),
     where("roomId", "==", roomId),
     where("bedNo", "==", bedNo),
-    where("active", "==", true)
+    where("active", "==", true),
   );
   const snap = await getDocs(q);
   return !snap.empty;
@@ -175,7 +216,7 @@ export async function checkMemberHasRoom(memberId: string): Promise<boolean> {
     collection(db, "members"),
     where("id", "==", memberId),
     where("roomId", "!=", ""),
-    where("active", "==", true)
+    where("active", "==", true),
   );
   const snap = await getDocs(q);
   return !snap.empty;
@@ -190,7 +231,7 @@ export async function checkPaymentReferenceExists(referenceNo: string, date: str
   const q = query(
     collection(db, "payments"),
     where("referenceNo", "==", referenceNo),
-    where("date", "==", date)
+    where("date", "==", date),
   );
   const snap = await getDocs(q);
   return !snap.empty;
@@ -205,7 +246,7 @@ export async function checkDepositReferenceExists(referenceNo: string, date: str
   const q = query(
     collection(db, "deposits"),
     where("referenceNo", "==", referenceNo),
-    where("date", "==", date)
+    where("date", "==", date),
   );
   const snap = await getDocs(q);
   return !snap.empty;
@@ -219,7 +260,7 @@ export async function checkUtilityTypeExists(utilityType: string, month: string)
   const q = query(
     collection(db, "utilities"),
     where("type", "==", utilityType),
-    where("ym", "==", month)
+    where("ym", "==", month),
   );
   const snap = await getDocs(q);
   return !snap.empty;
@@ -265,7 +306,7 @@ export async function checkExpenseAllocationExists(expenseId: string, memberId: 
   const q = query(
     collection(db, "expense_allocations"),
     where("expenseId", "==", expenseId),
-    where("memberId", "==", memberId)
+    where("memberId", "==", memberId),
   );
   const snap = await getDocs(q);
   return !snap.empty;
@@ -277,4 +318,58 @@ export async function checkExpenseAllocationExists(expenseId: string, memberId: 
  */
 export function generateExpenseAllocationId(expenseId: string, memberId: string): string {
   return `${expenseId}_${memberId}`;
+}
+
+/**
+ * Clean up all duplicate charges for a specific month across all members.
+ * This is called during monthly closing to ensure no duplicate charges exist.
+ * Returns a summary of cleanup actions.
+ */
+export async function cleanupAllDuplicateCharges(
+  month: string,
+  categories: string[],
+): Promise<{ totalDeleted: number; details: Record<string, number> }> {
+  const details: Record<string, number> = {};
+  let totalDeleted = 0;
+
+  // Get all ledgers for the month
+  const q = query(
+    collection(db, "ledgers"),
+    where("ym", "==", month),
+  );
+  const snap = await getDocs(q);
+
+  // Group by memberId, transactionType, and category
+  const grouped: Record<string, string[]> = {};
+  snap.docs.forEach((d) => {
+    const data = d.data();
+    if (isChargeType(data.transactionType) && categories.includes(data.category)) {
+      const key = `${data.memberId}_${data.transactionType}_${data.category}`;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(d.id);
+    }
+  });
+
+  // For each group, keep only the first (oldest) entry
+  for (const key of Object.keys(grouped)) {
+    const ids = grouped[key];
+    if (ids.length > 1) {
+      // Sort by createdAt to find the oldest
+      const sortedIds = ids.sort((a, b) => {
+        const dataA = snap.docs.find((d) => d.id === a)?.data() as { createdAt?: number };
+        const dataB = snap.docs.find((d) => d.id === b)?.data() as { createdAt?: number };
+        return (dataA?.createdAt || 0) - (dataB?.createdAt || 0);
+      });
+      // Delete all but the first
+      const toDelete = sortedIds.slice(1);
+      for (const id of toDelete) {
+        await deleteDoc(doc(db, "ledgers", id));
+      }
+      const category = key.split("_")[2];
+      details[category] = (details[category] || 0) + toDelete.length;
+      totalDeleted += toDelete.length;
+    }
+  }
+
+  return { totalDeleted, details };
 }

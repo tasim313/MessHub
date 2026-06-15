@@ -263,7 +263,8 @@ function ChargesPage() {
         ...(charges.staffShare > 0 ? [{ category: "staff", label: "staff" }] : []),
       ];
       for (const { category } of allCategories) {
-        const deleted = await deleteDuplicateCharges(currentMember.id, ym, category);
+        const chargeDate = ym + "-01";
+        const deleted = await deleteDuplicateCharges(currentMember.id, ym, category, chargeDate);
         if (deleted > 0) cleanupResults.push(`${EXPENSE_CATEGORY_LABELS[category as keyof typeof EXPENSE_CATEGORY_LABELS] || category}: removed ${deleted} duplicate${deleted > 1 ? "s" : ""}`);
       }
       if (cleanupResults.length > 0) toast.info(cleanupResults.join(", "), { duration: 4000 });
@@ -272,7 +273,8 @@ function ChargesPage() {
 
       // Meal charge
       if (charges.mealCost > 0) {
-        const exists = await checkLedgerChargeExists(currentMember.id, ym, "meal");
+        const chargeDate = ym + "-01";
+        const exists = await checkLedgerChargeExists(currentMember.id, ym, "meal", chargeDate);
         if (!exists) {
           const mealNotes = `Meal cost for ${ym} (${memberSettlement.totalMeals} meals × ${bdt(memberSettlement.mealRate)})`;
           await addDocTo("ledgers", {
@@ -294,7 +296,8 @@ function ChargesPage() {
 
       // Rent charge
       if (charges.rentShare > 0) {
-        const exists = await checkLedgerChargeExists(currentMember.id, ym, "rent");
+        const chargeDate = ym + "-01";
+        const exists = await checkLedgerChargeExists(currentMember.id, ym, "rent", chargeDate);
         if (!exists) {
           await addDocTo("ledgers", {
             memberId: currentMember.id,
@@ -316,7 +319,8 @@ function ChargesPage() {
       // Individual expense/utility charges
       for (const [category, amount] of Object.entries(charges.expenseShareBreakdown)) {
         if (amount > 0) {
-          const exists = await checkLedgerChargeExists(currentMember.id, ym, category);
+          const chargeDate = ym + "-01";
+          const exists = await checkLedgerChargeExists(currentMember.id, ym, category, chargeDate);
           if (!exists) {
             const catLabel = EXPENSE_CATEGORY_LABELS[category as keyof typeof EXPENSE_CATEGORY_LABELS] || category;
             await addDocTo("ledgers", {
@@ -339,7 +343,8 @@ function ChargesPage() {
 
       // Staff charge
       if (charges.staffShare > 0) {
-        const exists = await checkLedgerChargeExists(currentMember.id, ym, "staff");
+        const chargeDate = ym + "-01";
+        const exists = await checkLedgerChargeExists(currentMember.id, ym, "staff", chargeDate);
         if (!exists) {
           await addDocTo("ledgers", {
             memberId: currentMember.id,
@@ -870,7 +875,7 @@ function ChargesPage() {
               </div>
               <div className="grid grid-cols-2 gap-3 mt-4">
                 <div className="rounded-lg border p-3 text-center">
-                  <div className="text-xs uppercase text-muted-foreground mb-1">Deposit (Mess owes member)</div>
+                  <div className="text-xs uppercase text-muted-foreground mb-1">Deposit (Member overpaid)</div>
                   <div className="text-lg font-bold text-primary">{memberSettlement.totalDeposit > 0 ? bdt(memberSettlement.totalDeposit) : "—"}</div>
                 </div>
                 <div className="rounded-lg border p-3 text-center">
@@ -880,7 +885,7 @@ function ChargesPage() {
               </div>
               <div className="mt-4 bg-background rounded-md p-3 text-center">
                 <Badge className={getStatusBadge(memberSettlement.settlementStatus) + " text-sm px-4 py-2"}>
-                  {memberSettlement.settlementStatus === "pay" ? "Member Owes Mess" : memberSettlement.settlementStatus === "receive" ? "Mess Owes Member" : "Settled"}
+                  {memberSettlement.settlementStatus === "pay" ? "Member Has Dues" : memberSettlement.settlementStatus === "receive" ? "Member Has Deposit" : "Settled"}
                 </Badge>
               </div>
 

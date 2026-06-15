@@ -7,16 +7,18 @@ import { Label } from "@/components/ui/label";
 import { useMemo, useState } from "react";
 import {
   useCollection,
+  orderBy,
   type Member,
   type MealEntry,
   type Bazar,
-  type Utility,
   type Deposit,
   type Credit,
   type Payment,
   type Staff,
   type Room,
 } from "@/lib/data";
+import { EXPENSE_CATEGORY_LABELS } from "@/lib/types";
+import type { MonthlyClosing, ExpenseAllocation, Expense, Advance, AdvanceRecovery } from "@/lib/types";
 import { computeMonthly } from "@/lib/calc";
 import { ymKey, bdt } from "@/lib/format";
 import {
@@ -48,12 +50,41 @@ function ReportsPage() {
   const { data: members } = useCollection<Member>("members");
   const { data: meals } = useCollection<MealEntry>("meals");
   const { data: bazar } = useCollection<Bazar>("bazar");
-  const { data: utilities } = useCollection<Utility>("utilities");
+  const { data: expenses } = useCollection<Expense>("expenses");
   const { data: deposits } = useCollection<Deposit>("deposits");
   const { data: credits } = useCollection<Credit>("credits");
   const { data: payments } = useCollection<Payment>("payments");
   const { data: staff } = useCollection<Staff>("staff");
   const { data: rooms } = useCollection<Room>("rooms");
+  const { data: closings } = useCollection<MonthlyClosing>("monthly_closing", [orderBy("createdAt", "desc")]);
+  const { data: allocations } = useCollection<ExpenseAllocation>("expense_allocations", [orderBy("createdAt", "desc")]);
+  const { data: advances } = useCollection<Advance>("advances");
+  const { data: advanceRecoveries } = useCollection<AdvanceRecovery>("advance_recoveries");
+
+  // Build prevClosings for carry forward
+  const prevClosings = useMemo(() => {
+    if (!closings.length) return [];
+    const [year, month] = ym.split("-").map(Number);
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const prevYear = month === 1 ? year - 1 : year;
+    const prevYm = `${prevYear}-${String(prevMonth).padStart(2, "0")}`;
+    const prevClosing = closings.find((c) => c.month === prevYm);
+    if (!prevClosing || prevClosing.status !== "closed") return [];
+    
+    const breakdown = (prevClosing as any).memberBreakdown || {};
+    return Object.entries(breakdown).map(([memberId, data]: [string, any]) => ({
+      month: prevYm,
+      memberId,
+      deposit: data.deposit || 0,
+      credit: data.credit || 0,
+    }));
+  }, [closings, ym]);
+
+  // Filter allocations for current month
+  const monthAllocations = useMemo(() => {
+    if (!allocations) return [];
+    return allocations.filter((a) => (a as any).ym === ym);
+  }, [allocations, ym]);
 
   const summary = useMemo(
     () =>
@@ -62,14 +93,36 @@ function ReportsPage() {
         members,
         meals,
         bazar,
-        utilities,
+        expenses,
         deposits,
         credits,
         payments,
         staff,
         rooms,
+        [],
+        prevClosings,
+        monthAllocations,
+        advances,
+        advanceRecoveries,
+        closings,
       ),
-    [ym, members, meals, bazar, utilities, deposits, credits, payments, staff, rooms],
+    [
+      ym,
+      members,
+      meals,
+      bazar,
+      expenses,
+      deposits,
+      credits,
+      payments,
+      staff,
+      rooms,
+      prevClosings,
+      monthAllocations,
+      advances,
+      advanceRecoveries,
+      closings,
+    ],
   );
 
   const exportPDF = () => {
@@ -147,8 +200,8 @@ function ReportsPage() {
     );
     XLSX.utils.book_append_sheet(
       wb,
-      XLSX.utils.json_to_sheet(utilities.filter((u) => u.ym === ym)),
-      "Utilities",
+      XLSX.utils.json_to_sheet(expenses.filter((e: Expense) => e.ym === ym)),
+      "Expenses",
     );
     XLSX.utils.book_append_sheet(
       wb,
