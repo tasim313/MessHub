@@ -36,6 +36,7 @@ import type { Member, Expense, ExpenseAllocation, Room, Staff } from "./types";
 import { EXPENSE_CATEGORY_LABELS } from "./types";
 import { calculateMemberExpenseShares, calculateMemberStaffShare } from "./calculations/engine-v2";
 import { createAdvance } from "./advance-service";
+import { checkLedgerChargeExists, checkExpenseAllocationExists, checkPaymentReferenceExists } from "./duplicate-check";
 
 // ============================================================================
 // 1. GENERATE CHARGES FROM A SHARED EXPENSE
@@ -75,6 +76,17 @@ export async function generateChargesFromExpense(
   let chargesCreated = 0;
 
   for (const allocation of allocations) {
+    // Check if charge already exists for this member+month+category+date
+    const exists = await checkLedgerChargeExists(
+      allocation.memberId,
+      ym,
+      expense.category,
+      expense.date,
+    );
+    if (exists) {
+      continue;
+    }
+
     // Save allocation to expense_allocations collection
     await addDoc(collection(db, "expense_allocations"), {
       ...allocation,
@@ -112,56 +124,60 @@ export async function generateChargesFromExpense(
     const payer = activeMembers.find((m) => m.id === expense.paidBy);
 
     if (payer && payerShare > 0) {
-      // Record internal payment - payer's own share is auto-paid
-      await addDoc(collection(db, "payments"), {
-        memberId: expense.paidBy,
-        memberName: payer.name,
-        amount: payerShare,
-        method: "cash",
-        date: expense.date,
-        ym,
-        status: "paid",
-        category: expense.category,
-        notes: `Auto-payment: ${payer.name}'s own share of ${EXPENSE_CATEGORY_LABELS[expense.category] || expense.category}`,
-        referenceId: expense.id,
-        referenceType: "expense",
-        createdAt: Date.now(),
-        createdBy: uid,
-      });
+      // Check if payment already exists
+      const paymentExists = await checkExpenseAllocationExists(expense.id, expense.paidBy);
+      if (!paymentExists) {
+        // Record internal payment - payer's own share is auto-paid
+        await addDoc(collection(db, "payments"), {
+          memberId: expense.paidBy,
+          memberName: payer.name,
+          amount: payerShare,
+          method: "cash",
+          date: expense.date,
+          ym,
+          status: "paid",
+          category: expense.category,
+          notes: `Auto-payment: ${payer.name}'s own share of ${EXPENSE_CATEGORY_LABELS[expense.category] || expense.category}`,
+          referenceId: expense.id,
+          referenceType: "expense",
+          createdAt: Date.now(),
+          createdBy: uid,
+        });
 
-      // Record in ledger as payment
-      await addDoc(collection(db, "ledgers"), {
-        memberId: expense.paidBy,
-        memberName: payer.name,
-        date: expense.date,
-        ym,
-        transactionType: "payment",
-        category: expense.category,
-        amount: payerShare,
-        notes: `Internal: ${payer.name}'s own share paid`,
-        referenceId: expense.id,
-        referenceType: "expense",
-        createdAt: Date.now(),
-        createdBy: uid,
-      });
-    }
+        // Record in ledger as payment
+        await addDoc(collection(db, "ledgers"), {
+          memberId: expense.paidBy,
+          memberName: payer.name,
+          date: expense.date,
+          ym,
+          transactionType: "payment",
+          category: expense.category,
+          amount: payerShare,
+          notes: `Internal: ${payer.name}'s own share paid`,
+          referenceId: expense.id,
+          referenceType: "expense",
+          createdAt: Date.now(),
+          createdBy: uid,
+        });
+      }
 
-    // 4. Create advance for the excess (expense amount - payer's share)
-    const advanceAmount = amount - payerShare;
-    if (advanceAmount > 0 && payer) {
-      const categoryLabel = EXPENSE_CATEGORY_LABELS[expense.category] || expense.category;
-      const advanceId = await createAdvance(
-        expense.paidBy,
-        payer.name,
-        advanceAmount,
-        `${categoryLabel} - ${expense.date}`,
-        "expense",
-        expense.id,
-        ym,
-        uid,
-      );
+      // 4. Create advance for the excess (expense amount - payer's share)
+      const advanceAmount = amount - payerShare;
+      if (advanceAmount > 0 && payer) {
+        const categoryLabel = EXPENSE_CATEGORY_LABELS[expense.category] || expense.category;
+        const advanceId = await createAdvance(
+          expense.paidBy,
+          payer.name,
+          advanceAmount,
+          `${categoryLabel} - ${expense.date}`,
+          "expense",
+          expense.id,
+          ym,
+          uid,
+        );
 
-      return { allocationsCreated, chargesCreated, advanceCreated: advanceId, advanceAmount };
+        return { allocationsCreated, chargesCreated, advanceCreated: advanceId, advanceAmount };
+      }
     }
   }
 
@@ -284,7 +300,7 @@ export async function generateRentCharges(
       continue;
     }
 
-    const rentAmount = room.monthlyRent / room.totalBeds;
+    const rentAmount = Math.round((room.monthlyRent / room.totalBeds) * 100) / 100;
     if (rentAmount <= 0) {
       skipped++;
       continue;
@@ -315,19 +331,28 @@ export async function generateRentCharges(
       createdBy: uid,
     });
 
-    // Generate ledger charge
-    await addDoc(collection(db, "ledgers"), {
-      memberId: member.id,
-      memberName: member.name,
-      date: `${ym}-01`,
+    // Generate ledger charge with date check
+    const chargeDate = `${ym}-01`;
+    const ledgerExists = await checkLedgerChargeExists(
+      member.id,
       ym,
-      transactionType: "rent_charge",
-      category: "rent",
-      amount: rentAmount,
-      notes: `Rent for ${ym} - ${room.roomNo} (${room.monthlyRent}/${room.totalBeds} beds)`,
-      createdAt: Date.now(),
-      createdBy: uid,
-    });
+      "rent",
+      chargeDate,
+    );
+    if (!ledgerExists) {
+      await addDoc(collection(db, "ledgers"), {
+        memberId: member.id,
+        memberName: member.name,
+        date: chargeDate,
+        ym,
+        transactionType: "rent_charge",
+        category: "rent",
+        amount: rentAmount,
+        notes: `Rent for ${ym} - ${room.roomNo} (${room.monthlyRent}/${room.totalBeds} beds)`,
+        createdAt: Date.now(),
+        createdBy: uid,
+      });
+    }
 
     created++;
   }
@@ -356,21 +381,21 @@ export async function generateStaffCharges(
     const staffShare = calculateMemberStaffShareFromService(member, activeStaff, activeMembers);
     if (staffShare <= 0) continue;
 
-    // Check if staff charge already exists for this member+month
-    const existingQuery = query(
-      collection(db, "ledgers"),
-      where("memberId", "==", member.id),
-      where("ym", "==", ym),
-      where("transactionType", "==", "staff_charge"),
+    // Check if staff charge already exists for this member+month+date
+    const chargeDate = `${ym}-01`;
+    const exists = await checkLedgerChargeExists(
+      member.id,
+      ym,
+      "staff",
+      chargeDate,
     );
-    const existing = await getDocs(existingQuery);
-    if (!existing.empty) continue;
+    if (exists) continue;
 
     // Generate ledger charge
     await addDoc(collection(db, "ledgers"), {
       memberId: member.id,
       memberName: member.name,
-      date: `${ym}-01`,
+      date: chargeDate,
       ym,
       transactionType: "staff_charge",
       category: "staff",

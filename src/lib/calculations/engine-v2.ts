@@ -21,7 +21,7 @@
  * ACCOUNTING EQUATIONS:
  *   Total Charges = Sum of all member charges for all obligations
  *   Total Payments = Sum of all member payments
- *   Total Advances = Sum of all outstanding advances (money mess owes to members who overpaid)
+ *   Total Advances = Sum of all outstanding advances (money other members owe to advance-givers)
  *   Net Position = Total Payments + Total Contributions - Total Charges - Previous Credit + Previous Deposit
  */
 import type {
@@ -96,7 +96,7 @@ export interface MemberMonthlySummary {
   paymentsMade: number;
   
   // Settlement
-  balance: number; // Positive = mess owes member, Negative = member owes mess
+  balance: number; // Positive = member overpaid (held as deposit), Negative = member underpaid (has dues)
   depositAmount: number; // Auto-computed from positive balance
   creditAmount: number; // Auto-computed from negative balance
   settlementStatus: "settled" | "pay" | "receive";
@@ -177,6 +177,14 @@ const STAFF_SERVICE_MAP: Record<string, string> = {
 // Helper Functions
 // ============================================================================
 
+/**
+ * Round a number to 2 decimal places to avoid floating point precision issues
+ * This ensures all monetary values are clean decimals, not floats
+ */
+function roundToTwoDecimals(value: number): number {
+  return Math.round((value || 0) * 100) / 100;
+}
+
 function isMemberSubscribedToService(member: Member, serviceType: string): boolean {
   if (!member.services) return false;
   return member.services.some((s) => s.type === serviceType && s.enabled);
@@ -245,10 +253,10 @@ export function calculateMemberExpenseShares(
       .filter((alloc) => alloc.memberId === member.id)
       .forEach((alloc) => {
         const cat = alloc.category;
-        expenseShareBreakdown[cat] = (expenseShareBreakdown[cat] || 0) + (alloc.amount || 0);
+        expenseShareBreakdown[cat] = roundToTwoDecimals((expenseShareBreakdown[cat] || 0) + (alloc.amount || 0));
         expenseShares += alloc.amount || 0;
       });
-    return { expenseShares, expenseShareBreakdown };
+    return { expenseShares: roundToTwoDecimals(expenseShares), expenseShareBreakdown };
   }
 
   // Fallback: calculate on-the-fly from expenses
@@ -267,12 +275,12 @@ export function calculateMemberExpenseShares(
     }
 
     if (memberShare > 0) {
-      expenseShareBreakdown[expense.category] = (expenseShareBreakdown[expense.category] || 0) + memberShare;
+      expenseShareBreakdown[expense.category] = roundToTwoDecimals((expenseShareBreakdown[expense.category] || 0) + memberShare);
       expenseShares += memberShare;
     }
   });
 
-  return { expenseShares, expenseShareBreakdown };
+  return { expenseShares: roundToTwoDecimals(expenseShares), expenseShareBreakdown };
 }
 
 /**
@@ -305,7 +313,7 @@ export function calculateMemberStaffShare(
  *   - A's own share: 500 Tk (auto-paid, treated as internal payment)
  *   - Advance: 500 Tk (the excess A paid for B)
  * 
- * This advance is a LIABILITY of the mess toward Member A.
+ * This advance is a LIABILITY where other members owe this amount to Member A.
  */
 export function calculateExpenseAdvance(
   expense: Expense,
@@ -411,10 +419,10 @@ export function calculateMemberMonthlySummary(
   // 1. Calculate meal rate and meal cost
   const { mealRate } = calculateMealRate(bazarEntries, mealEntries, ym);
   const totalMeals = getMemberMealsCount(member.id, monthMeals);
-  const mealCost = totalMeals * mealRate;
+  const mealCost = roundToTwoDecimals(totalMeals * mealRate);
 
   // 2. Calculate rent share
-  const rentShare = getPerBedRent(member, rooms);
+  const rentShare = roundToTwoDecimals(getPerBedRent(member, rooms));
 
   // 3. Calculate expense shares
   const { expenseShares, expenseShareBreakdown } = calculateMemberExpenseShares(
@@ -422,7 +430,7 @@ export function calculateMemberMonthlySummary(
   );
 
   // 4. Calculate staff share
-  const staffShare = calculateMemberStaffShare(member, staff, activeMembers);
+  const staffShare = roundToTwoDecimals(calculateMemberStaffShare(member, staff, activeMembers));
 
   // 5. Calculate bazar contributions
   const bazarContribution = monthBazar
@@ -480,15 +488,18 @@ export function calculateMemberMonthlySummary(
   const previousCredit = prevClosing?.credit || 0;
   const previousDue = member.previousDue || 0;
 
+  // Round expense shares to 2 decimal places
+  const roundedExpenseShares = roundToTwoDecimals(expenseShares);
+
   // 11. Total charges for this member
-  const totalCharges = mealCost + rentShare + expenseShares + staffShare + previousDue + previousCredit - previousDeposit;
+  const totalCharges = roundToTwoDecimals(mealCost + rentShare + roundedExpenseShares + staffShare + previousDue + previousCredit - previousDeposit);
   
   // 12. Total contributions (what member paid FOR the mess)
   const paymentContributions = paymentsMade;
   const totalContributions = bazarContribution + expenseContributions + paymentContributions;
 
   // 13. Calculate settlement
-  const balance = totalContributions - totalCharges;
+  const balance = roundToTwoDecimals(totalContributions - totalCharges);
 
   let depositAmount = 0;
   let creditAmount = 0;
@@ -496,7 +507,7 @@ export function calculateMemberMonthlySummary(
 
   if (balance > 0) {
     depositAmount = balance;
-    settlementStatus = "receive"; // mess owes member
+    settlementStatus = "receive"; // member overpaid, excess held as deposit
   } else if (balance < 0) {
     creditAmount = Math.abs(balance);
     settlementStatus = "pay"; // member owes mess
@@ -507,7 +518,7 @@ export function calculateMemberMonthlySummary(
     memberName: member.name,
     mealCost,
     rentShare,
-    expenseShares,
+    expenseShares: roundedExpenseShares,
     expenseShareBreakdown,
     staffShare,
     previousDue,
@@ -550,7 +561,7 @@ export function calculateCompleteMonthlySummary(
   rooms: Room[],
   allAdvances: Advance[],
   allAdvanceRecoveries: AdvanceRecovery[],
-  closings: MonthlyClosing[],
+  closings: MonthlyClosing[] | Array<{ month: string; memberId: string; deposit: number; credit: number }>,
 ): MonthlySummary {
   const activeMembers = members.filter((m) => m.active);
   const monthMeals = mealEntries.filter((m) => m.ym === ym);
@@ -558,17 +569,26 @@ export function calculateCompleteMonthlySummary(
   const monthExpenses = expenses.filter((e) => e.ym === ym);
   const monthPayments = payments.filter((p) => p.ym === ym);
 
-  // Build prevClosings from existing monthly closing records
+  // Build prevClosings from existing monthly closing records or accept directly
   const prevYm = getPreviousMonthYm(ym);
-  const prevClosing = closings.find((c) => c.month === prevYm && c.status === "closed");
-  const prevClosings = prevClosing?.memberBreakdown
-    ? Object.entries(prevClosing.memberBreakdown).map(([memberId, data]) => ({
-        month: prevYm,
-        memberId,
-        deposit: data.deposit || 0,
-        credit: data.credit || 0,
-      }))
-    : [];
+  let prevClosings: Array<{ month: string; memberId: string; deposit: number; credit: number }> = [];
+
+  if (Array.isArray(closings) && closings.length > 0) {
+    const first = closings[0];
+    if ("memberId" in first && ("deposit" in first || "credit" in first)) {
+      prevClosings = closings as Array<{ month: string; memberId: string; deposit: number; credit: number }>;
+    } else {
+      const prevClosing = (closings as MonthlyClosing[]).find((c) => c.month === prevYm && c.status === "closed");
+      prevClosings = prevClosing?.memberBreakdown
+        ? Object.entries(prevClosing.memberBreakdown).map(([memberId, data]: [string, any]) => ({
+            month: prevYm,
+            memberId,
+            deposit: data.deposit || 0,
+            credit: data.credit || 0,
+          }))
+        : [];
+    }
+  }
 
   // Calculate meal rate
   const { totalBazar, totalMeals, mealRate } = calculateMealRate(bazarEntries, mealEntries, ym);

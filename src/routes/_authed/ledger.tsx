@@ -168,8 +168,8 @@ function LedgerPage() {
                 <div className={`rounded-lg p-4 ${statement.settlementStatus === "settled" ? "bg-primary/10" : statement.settlementStatus === "receive" ? "bg-green-500/10" : "bg-destructive/10"}`}>
                   <div className="text-xs text-muted-foreground">Status</div>
                   <div className={`text-xl font-bold ${statement.settlementStatus === "settled" ? "text-primary" : statement.settlementStatus === "receive" ? "text-green-600" : "text-destructive"}`}>
-                    {statement.settlementStatus === "receive" ? `Mess Owes ${bdt(statement.receivableAmount)}` :
-                     statement.settlementStatus === "pay" ? `Owes Mess ${bdt(statement.payableAmount)}` :
+                    {statement.settlementStatus === "receive" ? `Deposit: ${bdt(statement.receivableAmount)}` :
+                     statement.settlementStatus === "pay" ? `Due: ${bdt(statement.payableAmount)}` :
                      "Settled"}
                   </div>
                 </div>

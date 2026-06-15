@@ -75,6 +75,7 @@ import {
   verifyCalculations,
   validateMutualExclusivity,
 } from "./engine-v2";
+import { cleanupAllDuplicateCharges } from "../duplicate-check";
 
 // ============================================================================
 // TYPES
@@ -141,6 +142,14 @@ export async function generateMonthlyFinancials(
   ym: string,
   uid?: string,
 ): Promise<MonthlyGenerationResult> {
+  // 1. Run duplicate ledger charge cleanup first to prevent processing duplicates
+  const allCategories = [
+    "rent", "staff", "bazar", "house_rent", "electricity", "water", "gas", 
+    "internet", "generator", "cleaner_salary", "security_salary", "maintenance", 
+    "repair", "garbage", "wifi_equipment", "kitchen", "furniture", "appliance", "other_shared"
+  ];
+  await cleanupAllDuplicateCharges(ym, allCategories);
+
   // Fetch all data for the month
   let [members, mealEntries, bazarEntries, expenses, expenseAllocations, payments, staff, rooms, existingAdvances, existingAdvanceRecoveries, existingLedgerEntries, existingRentCharges, closings] = await Promise.all([
     fetchCollection<Member>("members"),

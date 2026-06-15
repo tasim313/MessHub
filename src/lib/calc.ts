@@ -92,6 +92,10 @@ export interface PerMember {
   // NEW: Advance info
   advancesGiven: number;
   outstandingAdvance: number;
+  // NEW: Contribution breakdown
+  bazarContribution: number;
+  paymentsMade: number;
+  expenseContributionsTotal: number;
 }
 
 // Service type mapping for utilities
@@ -171,7 +175,7 @@ export function computeMonthly(
       rooms,
       allAdvances,
       allAdvanceRecoveries,
-      closings,
+      closings && closings.length > 0 ? closings : prevClosings,
     );
 
     // Convert v2 result to legacy MonthlySummary format
@@ -218,10 +222,13 @@ export function computeMonthly(
         expenseContributions: m.expenseContributionBreakdown,
         carryForwardDeposit: m.previousDeposit,
         carryForwardCredit: m.previousCredit,
-        creditReason: m.creditAmount > 0 ? `Owes ${m.creditAmount} to mess` : undefined,
-        depositSource: m.depositAmount > 0 ? `Overpaid ${m.depositAmount}` : undefined,
+        creditReason: m.creditAmount > 0 ? `Due ৳${m.creditAmount} (unpaid charges)` : undefined,
+        depositSource: m.depositAmount > 0 ? `Deposit ৳${m.depositAmount} (excess held for member)` : undefined,
         advancesGiven: m.advancesGiven,
         outstandingAdvance: m.outstandingAdvance,
+        bazarContribution: m.bazarContribution,
+        paymentsMade: m.paymentsMade,
+        expenseContributionsTotal: m.expenseContributions,
       })),
       settlements: [],
       settlementSummary: {
@@ -280,35 +287,38 @@ export function computeMonthly(
     vacantBeds: result.vacantBeds,
     occupiedBeds: result.occupiedBeds,
     perMember: result.perMember.map((p) => ({
-      memberId: p.memberId,
-      memberName: p.memberName,
-      meals: p.meals,
-      mealCost: p.mealCost,
-      utilityShare: p.utilityShare,
-      rentShare: p.rentShare,
-      staffShare: p.staffShare,
-      previousDue: p.previousDue,
-      previousDeposit: p.previousDeposit,
-      previousCredit: p.previousCredit,
-      totalDue: p.totalDue,
-      deposited: p.deposited,
-      credited: p.credited,
-      paid: p.paid,
-      balance: p.balance,
-      settlementStatus: p.settlementStatus,
-      payableAmount: p.payableAmount,
-      receivableAmount: p.receivableAmount,
-      totalCharges: p.totalCharges,
-      totalContributions: p.totalContributions,
-      expenseShares: p.expenseShares,
-      expenseContributions: p.expenseContributions,
-      carryForwardDeposit: p.carryForwardDeposit,
-      carryForwardCredit: p.carryForwardCredit,
-      creditReason: p.creditReason,
-      depositSource: p.depositSource,
-      advancesGiven: 0,
-      outstandingAdvance: 0,
-    })),
+        memberId: p.memberId,
+        memberName: p.memberName,
+        meals: p.meals,
+        mealCost: p.mealCost,
+        utilityShare: p.utilityShare,
+        rentShare: p.rentShare,
+        staffShare: p.staffShare,
+        previousDue: p.previousDue,
+        previousDeposit: p.previousDeposit,
+        previousCredit: p.previousCredit,
+        totalDue: p.totalDue,
+        deposited: p.deposited,
+        credited: p.credited,
+        paid: p.paid,
+        balance: p.balance,
+        settlementStatus: p.settlementStatus,
+        payableAmount: p.payableAmount,
+        receivableAmount: p.receivableAmount,
+        totalCharges: p.totalCharges,
+        totalContributions: p.totalContributions,
+        expenseShares: p.expenseShares,
+        expenseContributions: p.expenseContributions,
+        carryForwardDeposit: p.carryForwardDeposit,
+        carryForwardCredit: p.carryForwardCredit,
+        creditReason: p.creditReason,
+        depositSource: p.depositSource,
+        advancesGiven: 0,
+        outstandingAdvance: 0,
+        bazarContribution: 0,
+        paymentsMade: 0,
+        expenseContributionsTotal: 0,
+      })),
     settlements: result.settlements,
     settlementSummary: result.settlementSummary,
   };

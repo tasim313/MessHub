@@ -564,6 +564,14 @@ export function calculateMemberContributions(
 }
 
 /**
+ * Round a number to 2 decimal places to avoid floating point precision issues
+ * This ensures all monetary values are clean decimals, not floats
+ */
+function roundToTwoDecimals(value: number): number {
+  return Math.round((value || 0) * 100) / 100;
+}
+
+/**
  * Calculate a member's total charges for a month.
  *
  * PER THE REQUIREMENTS:
@@ -586,8 +594,8 @@ export function calculateMemberCharges(
   monthAllocations: ExpenseAllocation[] = [],
 ): MemberCharges {
   const totalMeals = getMemberMealsCount(member.id, monthMeals);
-  const mealCost = totalMeals * mealRate;
-  const rentShare = getPerBedRent(member, rooms);
+  const mealCost = roundToTwoDecimals(totalMeals * mealRate);
+  const rentShare = roundToTwoDecimals(getPerBedRent(member, rooms));
 
   // Expense shares - prefer using persisted allocations if available
   let expenseShareBreakdown: Record<string, number> = {};
@@ -614,7 +622,7 @@ export function calculateMemberCharges(
       }
 
       if (memberShare > 0) {
-        expenseShareBreakdown[expense.category] = (expenseShareBreakdown[expense.category] || 0) + memberShare;
+        expenseShareBreakdown[expense.category] = roundToTwoDecimals((expenseShareBreakdown[expense.category] || 0) + memberShare);
         expenseShares += memberShare;
       }
     });
@@ -632,6 +640,12 @@ export function calculateMemberCharges(
 
   const previousDue = member.previousDue || 0;
 
+  // Round all values to 2 decimal places to avoid floating point precision issues
+  const roundedExpenseShares = roundToTwoDecimals(expenseShares);
+  const roundedStaffShare = roundToTwoDecimals(staffShare);
+  const roundedPreviousDeposit = roundToTwoDecimals(previousDeposit);
+  const roundedPreviousCredit = roundToTwoDecimals(previousCredit);
+
   // Total Charges = Meal Cost + Rent + Expense Shares + Staff Share + Previous Due + Previous Credit - Previous Deposit
   // Previous Credit: debt carried forward from last month (adds to current charges)
   // Previous Deposit: overpayment carried forward from last month (subtracts from current charges)
@@ -639,26 +653,26 @@ export function calculateMemberCharges(
   //   1. Previous Credit is reduced first
   //   2. Current Month Charges are paid next
   //   3. Excess becomes Deposit
-  const totalCharges = mealCost + rentShare + expenseShares + staffShare + previousDue + previousCredit - previousDeposit;
+  const totalCharges = roundToTwoDecimals(mealCost + rentShare + roundedExpenseShares + roundedStaffShare + previousDue + roundedPreviousCredit - roundedPreviousDeposit);
 
   return {
     mealCost,
     rentShare,
-    expenseShares,
+    expenseShares: roundedExpenseShares,
     expenseShareBreakdown,
-    staffShare,
+    staffShare: roundedStaffShare,
     previousDue,
-    previousDeposit,
-    previousCredit,
+    previousDeposit: roundedPreviousDeposit,
+    previousCredit: roundedPreviousCredit,
     totalCharges,
     chargeBreakdown: {
       meal: mealCost,
       rent: rentShare,
-      utilities: expenseShares,
-      staff: staffShare,
+      utilities: roundedExpenseShares,
+      staff: roundedStaffShare,
       previousDue,
-      previousCredit,
-        previousDeposit,
+      previousCredit: roundedPreviousCredit,
+      previousDeposit: roundedPreviousDeposit,
       },
     };
   }
@@ -771,7 +785,7 @@ export function calculateMemberSettlement(
 
   const { mealRate, totalBazar } = calculateMealRate(bazarEntries, mealEntries, ym);
   const totalMeals = getMemberMealsCount(member.id, monthMeals);
-  const mealCost = totalMeals * mealRate;
+  const mealCost = roundToTwoDecimals(totalMeals * mealRate);
   const totalBazarPaid = getMemberBazarPaid(member.id, monthBazar);
 
   // Get carry forward balances from previous month
@@ -808,7 +822,7 @@ export function calculateMemberSettlement(
   // - Previous Deposit decreases charges (member overpaid last month)
   // - Payments increase contributions (member pays now)
   // Net result: Payment first reduces credit, then reduces charges, then becomes deposit
-  const balance = contributions.totalContribution - charges.totalCharges;
+  const balance = roundToTwoDecimals(contributions.totalContribution - charges.totalCharges);
 
   // Determine Deposit and Credit (auto-computed from balance)
   // A member can NEVER have both > 0
