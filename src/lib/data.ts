@@ -8,6 +8,7 @@ import {
   updateDoc,
   deleteDoc,
   doc,
+  getDoc,
   serverTimestamp,
   setDoc,
   getDocs,
@@ -35,6 +36,7 @@ import type {
   MonthlyClosing,
   Settings,
   Expense,
+  Role,
 } from "./types";
 
 // Re-export all types for backward compatibility with existing imports
@@ -149,6 +151,25 @@ export async function findMemberByUid(uid: string) {
   );
   const first = snap.docs[0];
   return first ? ({ id: first.id, ...first.data() } as Member) : null;
+}
+
+/**
+ * Sync a member's role to the corresponding `users/{uid}` document.
+ *
+ * The Firestore security rules (isOwner/isManager/etc.) read the role from
+ * `users/{uid}.role`, NOT from `members/{id}.role`. So when an owner (or an
+ * approved change request) changes a member's role, we must also update the
+ * user document, otherwise the user's effective permissions never change.
+ *
+ * The owner is permitted to update any `users/{uid}` document per the rule
+ * `allow update: if isSelf(userId) || isOwner();` in firestore.rules.
+ */
+export async function syncUserRole(member: Member, role: Role) {
+  if (!member.uid) return;
+  const userRef = doc(db, "users", member.uid);
+  const snap = await getDoc(userRef);
+  if (!snap.exists()) return;
+  await updateDoc(userRef, { role });
 }
 
 export { where, orderBy };

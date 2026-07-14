@@ -27,6 +27,7 @@ import {
   addDocTo,
   updateDocIn,
   deleteDocFrom,
+  syncUserRole,
   type Member,
   type Room,
   type Utility,
@@ -190,6 +191,12 @@ function MembersPage() {
           return;
         }
         await updateDocIn("members", editing.id, form);
+        // The Firestore security rules read the role from users/{uid}, not
+        // members/{id}. Sync the new role so the user's permissions actually
+        // change (e.g. member -> owner/manager).
+        if (editing.role !== form.role) {
+          await syncUserRole(editing, form.role);
+        }
         toast.success("Member updated");
       } else if (profile?.role === "owner") {
         await addDocTo("members", { ...form, joinedAt: Date.now() });

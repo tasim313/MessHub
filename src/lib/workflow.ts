@@ -1,4 +1,4 @@
-import { addDocTo, deleteDocFrom, setDocIn, updateDocIn, type ChangeRequest, type Member } from "./data";
+import { addDocTo, deleteDocFrom, setDocIn, updateDocIn, findMemberByUid, syncUserRole, type ChangeRequest, type Member } from "./data";
 
 export interface ActorInfo {
   uid: string;
@@ -78,6 +78,22 @@ export async function applyApprovedRequest(request: ChangeRequest, reviewer: Act
 
   if (request.action === "update" && request.targetId && request.payload) {
     await updateDocIn(request.collectionName, request.targetId, request.payload);
+
+    // When a member's role is changed via an approved request, also sync it to
+    // the users/{uid} document. The Firestore security rules read the role from
+    // users/{uid}, so without this sync the user's permissions never change.
+    if (request.collectionName === "members") {
+      const payload = request.payload as Partial<Member>;
+      const previous = (request.previousData ?? null) as Member | null;
+      if (payload.role && previous && previous.role !== payload.role) {
+        const member = previous.uid
+          ? previous
+          : await findMemberByUid((payload.uid as string) || "");
+        if (member) {
+          await syncUserRole(member, payload.role as Member["role"]);
+        }
+      }
+    }
   }
 
   if (request.action === "delete" && request.targetId) {
