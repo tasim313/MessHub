@@ -20,6 +20,7 @@ import {
 import { EXPENSE_CATEGORY_LABELS } from "@/lib/types";
 import type { MonthlyClosing, ExpenseAllocation, Expense, Advance, AdvanceRecovery, CreditNote, Refund } from "@/lib/types";
 import { computeMonthly } from "@/lib/calc";
+import { calculateMemberToMemberSettlements, consolidateSettlements } from "@/lib/financial-engine";
 import { ymKey, bdt } from "@/lib/format";
 import {
   FileDown,
@@ -27,6 +28,8 @@ import {
   Mail,
   MessageCircle,
   Printer,
+  ArrowRight,
+  CheckCircle2,
 } from "lucide-react";
 import { StatCard } from "@/components/app/StatCard";
 import { MonthPicker } from "@/components/ui/month-picker";
@@ -130,6 +133,19 @@ function ReportsPage() {
       refunds,
     ],
   );
+
+  // "Who owes whom" — a direct, zero-sum redistribution among members for
+  // bills one member fronted for the others. Always nets to exactly zero:
+  // every taka one member is owed is a taka someone else owes them, nothing
+  // is owed to or by the mess itself.
+  const activeMembersList = useMemo(() => members.filter((m) => m.active), [members]);
+  const monthExpensesForSettlement = useMemo(() => expenses.filter((e) => e.ym === ym), [expenses, ym]);
+  const monthBazarForSettlement = useMemo(() => bazar.filter((b) => b.ym === ym), [bazar, ym]);
+  const memberToMemberSettlements = useMemo(() => {
+    const raw = calculateMemberToMemberSettlements(monthExpensesForSettlement, monthBazarForSettlement, activeMembersList, ym);
+    return consolidateSettlements(raw);
+  }, [monthExpensesForSettlement, monthBazarForSettlement, activeMembersList, ym]);
+  const totalSettlementAmount = memberToMemberSettlements.reduce((s, t) => s + t.amount, 0);
 
   const exportPDF = () => {
     const doc = new jsPDF();
@@ -434,6 +450,109 @@ function ReportsPage() {
                     </tr>
                   ))}
                 </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+
+        {/* Member Settlement Summary — who gave what, who owes what */}
+        <Card className="p-5">
+          <h3 className="font-semibold">Member Settlement Summary — {ym}</h3>
+          <p className="text-xs text-muted-foreground mt-1 mb-4">
+            What each member actually paid this month vs. their fair share of every cost (rent + meals + utilities + staff).
+          </p>
+          {summary.perMember.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">No data for this month</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-xs uppercase text-muted-foreground bg-muted/50">
+                  <tr>
+                    <th className="text-left p-3 font-medium">Member</th>
+                    <th className="text-right p-3 font-medium">Total Paid</th>
+                    <th className="text-right p-3 font-medium">Fair Share</th>
+                    <th className="text-right p-3 font-medium">Balance</th>
+                    <th className="text-center p-3 font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.perMember.map((p) => (
+                    <tr key={p.memberId} className="border-t hover:bg-muted/30">
+                      <td className="p-3 font-medium">{p.memberName}</td>
+                      <td className="p-3 text-right tabular-nums text-primary">{bdt(p.totalContributions)}</td>
+                      <td className="p-3 text-right tabular-nums">{bdt(p.totalCharges)}</td>
+                      <td className={`p-3 text-right tabular-nums font-bold ${p.balance >= 0 ? "text-primary" : "text-destructive"}`}>
+                        {p.balance >= 0 ? "+" : "-"}{bdt(Math.abs(p.balance))}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                          p.settlementStatus === "settled" ? "bg-primary/10 text-primary" :
+                          p.settlementStatus === "receive" ? "bg-green-500/10 text-green-600" :
+                          "bg-destructive/10 text-destructive"
+                        }`}>
+                          {p.settlementStatus === "receive" ? "Will Receive" : p.settlementStatus === "pay" ? "Must Pay" : "Settled"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="font-semibold bg-muted/30 border-t-2">
+                  <tr>
+                    <td className="p-3">Total</td>
+                    <td className="p-3 text-right">{bdt(summary.perMember.reduce((s, p) => s + p.totalContributions, 0))}</td>
+                    <td className="p-3 text-right">{bdt(summary.perMember.reduce((s, p) => s + p.totalCharges, 0))}</td>
+                    <td className="p-3 text-right">{bdt(summary.perMember.reduce((s, p) => s + p.balance, 0))}</td>
+                    <td className="p-3"></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </Card>
+
+        {/* Final Settlement — Who Owes Whom (never held by the mess itself) */}
+        <Card className="p-5">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="font-semibold">Final Settlement — Who Owes Whom — {ym}</h3>
+            {memberToMemberSettlements.length > 0 && (
+              <div className="flex items-center gap-1.5 text-xs text-primary font-medium">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Total Receivable = Total Payable = {bdt(totalSettlementAmount)}
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mb-4">
+            Direct transfers needed to zero everyone out — money flows only between members; the mess itself never holds or owes anything.
+          </p>
+          {memberToMemberSettlements.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">Everyone is settled — no transfers needed.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-xs uppercase text-muted-foreground bg-muted/50">
+                  <tr>
+                    <th className="text-left p-3 font-medium">From</th>
+                    <th className="text-center p-3 font-medium"></th>
+                    <th className="text-left p-3 font-medium">To</th>
+                    <th className="text-right p-3 font-medium">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {memberToMemberSettlements.map((st, i) => (
+                    <tr key={`${st.fromMemberId}-${st.toMemberId}-${i}`} className="border-t hover:bg-muted/30">
+                      <td className="p-3 font-medium">{st.fromMemberName}</td>
+                      <td className="p-3 text-center text-muted-foreground"><ArrowRight className="h-3.5 w-3.5 inline" /></td>
+                      <td className="p-3 font-medium">{st.toMemberName}</td>
+                      <td className="p-3 text-right tabular-nums font-bold text-primary">{bdt(st.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="font-semibold bg-muted/30 border-t-2">
+                  <tr>
+                    <td colSpan={3} className="p-3">Total</td>
+                    <td className="p-3 text-right text-primary">{bdt(totalSettlementAmount)}</td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
           )}
