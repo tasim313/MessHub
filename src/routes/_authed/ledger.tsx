@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useMemo, useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { useCollection, orderBy, type Member, type LedgerEntry, type MealEntry, type Bazar, type Deposit, type Credit, type Payment, type Staff, type Room } from "@/lib/data";
-import type { Expense } from "@/lib/types";
+import type { Expense, ExpenseAllocation, MonthlyClosing, CreditNote, Refund } from "@/lib/types";
 import { ymKey, bdt } from "@/lib/format";
 import { calculateMemberSettlement } from "@/lib/calculations/engine";
 import { MonthPicker } from "@/components/ui/month-picker";
@@ -38,6 +38,10 @@ function LedgerPage() {
   const { data: rentCharges } = useCollection<RentCharge>("rent_charges");
   const { data: utilityAllocations } = useCollection<UtilityAllocation>("utility_allocations");
   const { data: staffAllocations } = useCollection<StaffAllocation>("staff_allocations");
+  const { data: closings } = useCollection<MonthlyClosing>("monthly_closing", [orderBy("createdAt", "desc")]);
+  const { data: allocations } = useCollection<ExpenseAllocation>("expense_allocations", [orderBy("createdAt", "desc")]);
+  const { data: creditNotes } = useCollection<CreditNote>("credit_notes");
+  const { data: refunds } = useCollection<Refund>("refunds");
 
   const memberOptions = useMemo(() => {
     if (profile?.role === "member") {
@@ -52,6 +56,27 @@ function LedgerPage() {
       setSelectedMember(memberOptions[0].id);
     }
   }, [memberOptions, profile, selectedMember]);
+
+  const prevMonthClosings = useMemo(() => {
+    if (!selectedMember || !closings.length) return [];
+    const [year, month] = ym.split("-").map(Number);
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const prevYear = month === 1 ? year - 1 : year;
+    const prevYm = `${prevYear}-${String(prevMonth).padStart(2, "0")}`;
+    const prevClosing = closings.find((c) => c.month === prevYm);
+    if (!prevClosing || prevClosing.status !== "closed") return [];
+    return [{
+      month: prevClosing.month,
+      memberId: selectedMember,
+      deposit: (prevClosing as any).memberBreakdown?.[selectedMember]?.deposit || 0,
+      credit: (prevClosing as any).memberBreakdown?.[selectedMember]?.credit || 0,
+    }];
+  }, [selectedMember, ym, closings]);
+
+  const monthAllocations = useMemo(
+    () => allocations.filter((a) => (a as any).ym === ym),
+    [allocations, ym],
+  );
 
   const statement = useMemo(() => {
     if (!selectedMember) return null;
@@ -71,8 +96,12 @@ function LedgerPage() {
       activeMembers,
       rooms,
       staff,
+      prevMonthClosings,
+      monthAllocations,
+      creditNotes,
+      refunds,
     );
-  }, [selectedMember, ym, members, entries, meals, bazar, expenses, deposits, credits, payments, rooms, staff]);
+  }, [selectedMember, ym, members, entries, meals, bazar, expenses, deposits, credits, payments, rooms, staff, prevMonthClosings, monthAllocations, creditNotes, refunds]);
 
   if (!profile) return null;
 
@@ -162,7 +191,7 @@ function LedgerPage() {
                 <div className="rounded-lg bg-muted p-4">
                   <div className="text-xs text-muted-foreground">Net Balance</div>
                   <div className={`text-xl font-bold ${statement.balance >= 0 ? "text-primary" : "text-destructive"}`}>
-                    {bdt(statement.balance)}
+                    {statement.balance >= 0 ? "Deposit " : "Due "}{bdt(Math.abs(statement.balance))}
                   </div>
                 </div>
                 <div className={`rounded-lg p-4 ${statement.settlementStatus === "settled" ? "bg-primary/10" : statement.settlementStatus === "receive" ? "bg-green-500/10" : "bg-destructive/10"}`}>
@@ -220,33 +249,33 @@ function LedgerPage() {
                       <td className="p-3 font-medium">Meals</td>
                       <td className="p-3 text-right tabular-nums text-destructive">{bdt(statement.charges.mealCost)}</td>
                       <td className="p-3 text-right tabular-nums">—</td>
-                      <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(-statement.charges.mealCost)}</td>
+                      <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(statement.charges.mealCost)}</td>
                     </tr>
                     <tr className="border-t">
                       <td className="p-3 font-medium">Rent</td>
                       <td className="p-3 text-right tabular-nums text-destructive">{bdt(statement.charges.rentShare)}</td>
                       <td className="p-3 text-right tabular-nums">—</td>
-                      <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(-statement.charges.rentShare)}</td>
+                      <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(statement.charges.rentShare)}</td>
                     </tr>
                     {Object.entries(statement.charges.expenseShareBreakdown).map(([cat, amount]) => (
                       <tr key={cat} className="border-t">
                         <td className="p-3 font-medium">{cat.replace(/_/g, " ")}</td>
                         <td className="p-3 text-right tabular-nums text-destructive">{bdt(amount)}</td>
                         <td className="p-3 text-right tabular-nums">—</td>
-                        <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(-amount)}</td>
+                        <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(amount)}</td>
                       </tr>
                     ))}
                     <tr className="border-t">
                       <td className="p-3 font-medium">Staff</td>
                       <td className="p-3 text-right tabular-nums text-destructive">{bdt(statement.charges.staffShare)}</td>
                       <td className="p-3 text-right tabular-nums">—</td>
-                      <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(-statement.charges.staffShare)}</td>
+                      <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(statement.charges.staffShare)}</td>
                     </tr>
                     <tr className="border-t bg-muted/30">
                       <td className="p-3 font-bold">Total Charges</td>
                       <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(statement.charges.totalCharges)}</td>
                       <td className="p-3 text-right tabular-nums">—</td>
-                      <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(-statement.charges.totalCharges)}</td>
+                      <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(statement.charges.totalCharges)}</td>
                     </tr>
                     {Object.entries(statement.contributions.expenseBreakdown).map(([cat, amount]) => (
                       <tr key={cat} className="border-t">
@@ -280,10 +309,10 @@ function LedgerPage() {
                     </tr>
                     <tr className="border-t bg-primary/5">
                       <td className="p-3 font-bold text-lg">Net Balance</td>
-                      <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(-statement.charges.totalCharges)}</td>
+                      <td className="p-3 text-right tabular-nums font-bold text-destructive">{bdt(statement.charges.totalCharges)}</td>
                       <td className="p-3 text-right tabular-nums font-bold text-primary">{bdt(statement.contributions.totalContribution)}</td>
                       <td className={`p-3 text-right tabular-nums font-bold text-lg ${statement.balance >= 0 ? "text-primary" : "text-destructive"}`}>
-                        {bdt(statement.balance)}
+                        {statement.balance >= 0 ? "Deposit " : "Due "}{bdt(Math.abs(statement.balance))}
                       </td>
                     </tr>
                   </tbody>

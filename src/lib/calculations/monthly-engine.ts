@@ -114,6 +114,11 @@ function isMemberSubscribedToService(member: Member, serviceType: string): boole
   return member.services.some((s) => s.type === serviceType && s.enabled);
 }
 
+function isMemberExplicitlyOptedOut(member: Member, serviceType: string): boolean {
+  if (!member.services) return false;
+  return member.services.some((s) => s.type === serviceType && s.enabled === false);
+}
+
 function getServiceTypeForExpenseCategory(category: string): string | null {
   return EXPENSE_CATEGORY_TO_SERVICE[category as ExpenseCategory] || null;
 }
@@ -287,15 +292,22 @@ export async function generateMonthlyFinancials(
 
   for (const expense of monthExpenses) {
     const serviceType = getServiceTypeForExpenseCategory(expense.category);
-    const subscribers = serviceType
+    let subscribers = serviceType
       ? activeMembers.filter((m) => isMemberSubscribedToService(m, serviceType))
       : activeMembers;
+    if (serviceType && subscribers.length === 0) {
+      // Nobody has explicitly subscribed — don't let the expense vanish from
+      // everyone's charges. Fall back to every active member who hasn't
+      // explicitly opted out.
+      subscribers = activeMembers.filter((m) => !isMemberExplicitlyOptedOut(m, serviceType));
+      if (subscribers.length === 0) subscribers = activeMembers;
+    }
     const totalSubscribers = subscribers.length || 1;
 
     // Calculate allocations
     for (const member of activeMembers) {
       const isSubscribed = serviceType
-        ? isMemberSubscribedToService(member, serviceType)
+        ? subscribers.some((m) => m.id === member.id) && !isMemberExplicitlyOptedOut(member, serviceType)
         : true;
 
       if (!isSubscribed) continue;
@@ -348,7 +360,7 @@ export async function generateMonthlyFinancials(
 
       // Calculate payer's share
       const payerIsSubscribed = serviceType
-        ? isMemberSubscribedToService(payer, serviceType)
+        ? subscribers.some((m) => m.id === payer.id) && !isMemberExplicitlyOptedOut(payer, serviceType)
         : true;
       const payerShare = payerIsSubscribed ? (expense.amount || 0) / totalSubscribers : 0;
 

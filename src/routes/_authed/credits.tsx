@@ -18,7 +18,7 @@ import {
   BadgePercent, Wallet, ArrowDownRight, AlertTriangle,
   Search, Filter, RotateCcw, TrendingDown, X,
 } from "lucide-react";
-import type { Deposit, Credit, Payment, Expense } from "@/lib/types";
+import type { Deposit, Credit, Payment, Expense, ExpenseAllocation, MonthlyClosing, CreditNote, Refund } from "@/lib/types";
 import { calculateAllSettlements, getSettlementSummary } from "@/lib/calculations/engine";
 
 export const Route = createFileRoute("/_authed/credits")({
@@ -48,6 +48,10 @@ function CreditsPage() {
   const { data: payments } = useCollection<Payment>("payments");
   const { data: staff } = useCollection<Staff>("staff");
   const { data: ledgers } = useCollection<LedgerEntry>("ledgers");
+  const { data: closings } = useCollection<MonthlyClosing>("monthly_closing", [orderBy("createdAt", "desc")]);
+  const { data: allocations } = useCollection<ExpenseAllocation>("expense_allocations", [orderBy("createdAt", "desc")]);
+  const { data: creditNotes } = useCollection<CreditNote>("credit_notes");
+  const { data: refunds } = useCollection<Refund>("refunds");
 
   const now = new Date();
   const currentYear = now.getFullYear();
@@ -79,11 +83,41 @@ function CreditsPage() {
     ? `${filterDateFrom || "Start"} to ${filterDateTo || "End"}`
     : `${monthOptions.find((m) => m.value === filterMonth)?.label} ${filterYear}`;
 
+  // Build carry-forward balances from the previous month's closing (if any)
+  const prevClosings = useMemo(() => {
+    if (!hasMonthSelected || !closings.length) return [];
+    const [year, month] = currentYm.split("-").map(Number);
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const prevYear = month === 1 ? year - 1 : year;
+    const prevYm = `${prevYear}-${String(prevMonth).padStart(2, "0")}`;
+    const prevClosing = closings.find((c) => c.month === prevYm);
+    if (!prevClosing || prevClosing.status !== "closed") return [];
+    const breakdown = (prevClosing as any).memberBreakdown || {};
+    return Object.entries(breakdown).map(([memberId, data]: [string, any]) => ({
+      month: prevYm,
+      memberId,
+      deposit: data.deposit || 0,
+      credit: data.credit || 0,
+    }));
+  }, [hasMonthSelected, currentYm, closings]);
+
+  const monthAllocations = useMemo(() => {
+    if (!allocations) return [];
+    if (hasMonthSelected) return allocations.filter((a) => (a as any).ym === currentYm);
+    return allocations.filter((a) => {
+      const exp = expenses.find((e) => e.id === a.expenseId);
+      return exp && exp.date >= filterDateFrom && exp.date <= filterDateTo;
+    });
+  }, [allocations, currentYm, hasMonthSelected, expenses, filterDateFrom, filterDateTo]);
+
   // Compute settlements
   const settlements = useMemo(() => {
     const monthExpenses = expenses.filter((e) => hasMonthSelected ? e.ym === currentYm : e.date >= filterDateFrom && e.date <= filterDateTo);
-    return calculateAllSettlements(members, currentYm, meals, bazar, deposits, credits, payments, ledgers, monthExpenses, rooms, staff);
-  }, [currentYm, members, meals, bazar, expenses, deposits, credits, payments, ledgers, rooms, staff, hasMonthSelected, filterDateFrom, filterDateTo]);
+    return calculateAllSettlements(
+      members, currentYm, meals, bazar, deposits, credits, payments, ledgers, monthExpenses, rooms, staff,
+      prevClosings, monthAllocations, creditNotes, refunds,
+    );
+  }, [currentYm, members, meals, bazar, expenses, deposits, credits, payments, ledgers, rooms, staff, hasMonthSelected, filterDateFrom, filterDateTo, prevClosings, monthAllocations, creditNotes, refunds]);
 
   const filteredSettlements = useMemo(() => {
     return [...settlements].sort((a, b) => a.balance - b.balance);
@@ -324,7 +358,7 @@ function CreditsPage() {
                       </td>
                       <td className="p-3 text-right tabular-nums text-destructive">{bdt(s.charges.totalCharges)}</td>
                       <td className="p-3 text-right tabular-nums text-primary">{bdt(s.contributions.totalContribution)}</td>
-                      <td className={`p-3 text-right tabular-nums font-bold ${s.balance > 0 ? "text-primary" : s.balance < 0 ? "text-destructive" : ""}`}>{bdt(s.balance)}</td>
+                      <td className={`p-3 text-right tabular-nums font-bold ${s.balance > 0 ? "text-primary" : s.balance < 0 ? "text-destructive" : ""}`}>{s.balance > 0 ? "Deposit " : s.balance < 0 ? "Due " : ""}{bdt(Math.abs(s.balance))}</td>
                       <td className="p-3 text-center">
                         <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${s.settlementStatus === "settled" ? "bg-primary/10 text-primary" : s.settlementStatus === "receive" ? "bg-green-500/10 text-green-600" : "bg-destructive/10 text-destructive"}`}>
                           {s.settlementStatus === "receive" ? `Receive ${bdt(s.receivableAmount)}` : s.settlementStatus === "pay" ? `Pay ${bdt(s.payableAmount)}` : "Settled"}

@@ -21,6 +21,8 @@ import type {
   ExpenseAllocation,
   Advance,
   AdvanceRecovery,
+  CreditNote,
+  Refund,
 } from "./types";
 import { computeMonthlySummary } from "./calculations/engine";
 import { calculateCompleteMonthlySummary, calculateMealRate, calculateMemberExpenseShares, calculateMemberStaffShare } from "./calculations/engine-v2";
@@ -96,6 +98,9 @@ export interface PerMember {
   bazarContribution: number;
   paymentsMade: number;
   expenseContributionsTotal: number;
+  // NEW: Credit notes / refunds
+  creditNoteTotal: number;
+  refundTotal: number;
 }
 
 // Service type mapping for utilities
@@ -155,11 +160,13 @@ export function computeMonthly(
   allAdvances: Advance[] = [],
   allAdvanceRecoveries: AdvanceRecovery[] = [],
   closings: MonthlyClosing[] = [],
+  creditNotes: CreditNote[] = [],
+  refunds: Refund[] = [],
 ): MonthlySummary {
   // Use v2 engine when we have Expense data (new unified expense system)
   // Otherwise fall back to v1 for backward compatibility
   const hasExpenses = (utilities as Expense[]).some((u) => (u as Expense).category !== undefined);
-  
+
   if (hasExpenses && allAdvances.length >= 0) {
     // Use v2 engine with Expense data
     const expenses = utilities as Expense[];
@@ -176,6 +183,8 @@ export function computeMonthly(
       allAdvances,
       allAdvanceRecoveries,
       closings && closings.length > 0 ? closings : prevClosings,
+      creditNotes,
+      refunds,
     );
 
     // Convert v2 result to legacy MonthlySummary format
@@ -194,13 +203,17 @@ export function computeMonthly(
       totalDeposits: v2Result.totalDeposits,
       totalCredits: v2Result.totalCredits,
       totalPayments: v2Result.totalPayments,
-      cashBalance: v2Result.totalPayments - v2Result.totalCharges,
+      // Cash on hand = money physically received (deposits + payments) minus
+      // money paid out (credits given back + total expenses). Kept consistent
+      // with the v1 engine's formula below so the figure doesn't disagree
+      // depending on which engine served the page.
+      cashBalance: v2Result.totalDeposits + v2Result.totalPayments - v2Result.totalCredits - (v2Result.totalExpenses + v2Result.totalBazar + v2Result.totalStaffCost),
       vacantBeds: v2Result.vacantBeds,
       occupiedBeds: v2Result.occupiedBeds,
       perMember: v2Result.members.map((m) => ({
         memberId: m.memberId,
         memberName: m.memberName,
-        meals: Math.round(m.mealCost / (v2Result.mealRate || 1)),
+        meals: m.totalMeals,
         mealCost: m.mealCost,
         utilityShare: m.expenseShares,
         rentShare: m.rentShare,
@@ -229,6 +242,8 @@ export function computeMonthly(
         bazarContribution: m.bazarContribution,
         paymentsMade: m.paymentsMade,
         expenseContributionsTotal: m.expenseContributions,
+        creditNoteTotal: m.creditNoteTotal,
+        refundTotal: m.refundTotal,
       })),
       settlements: [],
       settlementSummary: {
@@ -241,7 +256,7 @@ export function computeMonthly(
         totalPayments: v2Result.totalPayments,
         totalPayable: v2Result.totalCredits,
         totalReceivable: v2Result.totalDeposits,
-        totalBalance: v2Result.totalPayments - v2Result.totalCharges,
+        totalBalance: v2Result.members.reduce((s, m) => s + m.balance, 0),
         membersToPay: v2Result.members.filter((m) => m.settlementStatus === "pay") as any,
         membersToReceive: v2Result.members.filter((m) => m.settlementStatus === "receive") as any,
         settledMembers: v2Result.members.filter((m) => m.settlementStatus === "settled") as any,
@@ -264,7 +279,9 @@ export function computeMonthly(
     ledgerEntries,
     [],
     prevClosings,
-    monthAllocations
+    monthAllocations,
+    creditNotes,
+    refunds,
   );
 
   // Convert to legacy format for backward compatibility
@@ -318,6 +335,8 @@ export function computeMonthly(
         bazarContribution: 0,
         paymentsMade: 0,
         expenseContributionsTotal: 0,
+        creditNoteTotal: p.creditNoteTotal,
+        refundTotal: p.refundTotal,
       })),
     settlements: result.settlements,
     settlementSummary: result.settlementSummary,

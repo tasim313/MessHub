@@ -201,6 +201,7 @@ function MealsPage() {
 
   // Dialog state
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<MealEntry | null>(null);
   const [form, setForm] = useState({
     memberId: "",
@@ -225,9 +226,28 @@ function MealsPage() {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Guard against a double-click/double-submit creating two identical
+    // entries before the first write finishes.
+    if (saving) return;
     if (!form.memberId) return toast.error("Pick a member");
     const member = members.find((m) => (m.uid || m.id) === form.memberId);
     if (!member) return;
+    // A member normally has only one meal entry per day. Rather than
+    // silently inserting a possible duplicate OR blocking it outright (a
+    // second entry the same day can be legitimate — e.g. a correction added
+    // separately), detect it, show exactly what already exists, and require
+    // an explicit confirmation before anything is written.
+    if (!editing) {
+      const existing = meals.find((m) => m.memberId === form.memberId && m.date === form.date);
+      if (existing) {
+        const existingSummary = `breakfast:${existing.breakfast || 0}, lunch:${existing.lunch || 0}, dinner:${existing.dinner || 0}, guest:${existing.guest || 0}`;
+        const confirmed = confirm(
+          `${member.name} already has a meal entry for ${form.date} (${existingSummary}). Add another one anyway?`,
+        );
+        if (!confirmed) return;
+      }
+    }
+    setSaving(true);
     try {
       const payload = {
         memberId: form.memberId,
@@ -260,6 +280,7 @@ function MealsPage() {
       setOpen(false);
       resetForm();
     } catch (err) { toast.error((err as Error).message); }
+    finally { setSaving(false); }
   };
 
   const filterLabel = useDateRange
@@ -303,7 +324,7 @@ function MealsPage() {
                       </div>
                     ))}
                   </div>
-                  <DialogFooter><Button type="submit">Save</Button></DialogFooter>
+                  <DialogFooter><Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save"}</Button></DialogFooter>
                 </form>
               </DialogContent>
             </Dialog>

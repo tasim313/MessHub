@@ -179,6 +179,17 @@ export async function checkStaffAllocationExists(staffId: string, memberId: stri
 }
 
 /**
+ * Check if a staff member has any allocation records referencing them
+ * (from any member/month). Used to block deletion of a staff record that
+ * past months' charges still point at.
+ */
+export async function checkStaffHasAllocations(staffId: string): Promise<boolean> {
+  const q = query(collection(db, "staff_allocations"), where("staffId", "==", staffId));
+  const snap = await getDocs(q);
+  return !snap.empty;
+}
+
+/**
  * Check if a room with the same room number already exists
  * Returns true if duplicate exists
  */
@@ -296,6 +307,24 @@ export function generateUtilityAllocationId(utilityId: string, memberId: string)
  */
 export function generateStaffAllocationId(staffId: string, memberId: string, month: string): string {
   return `${staffId}_${memberId}_${month}`;
+}
+
+/**
+ * Check if an internal "payer's own share" payment already exists for an
+ * expense and member. Distinct from checkExpenseAllocationExists, which
+ * checks the expense_allocations collection (a different record that is
+ * always created before this check runs) — using that one here would
+ * always report a false positive and silently skip the internal payment.
+ * Returns true if the internal payment already exists.
+ */
+export async function checkInternalPaymentExists(expenseId: string, memberId: string): Promise<boolean> {
+  const q = query(
+    collection(db, "payments"),
+    where("referenceId", "==", expenseId),
+    where("memberId", "==", memberId),
+  );
+  const snap = await getDocs(q);
+  return !snap.empty;
 }
 
 /**

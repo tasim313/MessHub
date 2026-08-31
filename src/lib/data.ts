@@ -145,6 +145,14 @@ export async function setDocIn<T extends Record<string, unknown>>(
   );
 }
 
+export async function getDocIn<T>(
+  path: string,
+  id: string,
+): Promise<(T & { id: string }) | null> {
+  const snap = await getDoc(doc(db, path, id));
+  return snap.exists() ? ({ id: snap.id, ...snap.data() } as T & { id: string }) : null;
+}
+
 export async function findMemberByUid(uid: string) {
   const snap = await getDocs(
     query(collection(db, "members"), where("uid", "==", uid)),

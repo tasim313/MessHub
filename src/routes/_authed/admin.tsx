@@ -18,13 +18,14 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   orderBy,
-  setDocIn,
   useCollection,
   type ActivityLog,
   type ChangeRequest,
   type Member,
 } from "@/lib/data";
-import { applyApprovedRequest, rejectRequest } from "@/lib/workflow";
+import { doc, writeBatch } from "firebase/firestore";
+import { db } from "@/lib/firebase";
+import { applyApprovedRequest, rejectRequest, logActivity } from "@/lib/workflow";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -59,6 +60,10 @@ function statusLabel(status?: UserStatus, active?: boolean) {
   return "Active";
 }
 
+function currentStatusOf(userItem: ManagedUser): UserStatus {
+  return (userItem.status || (userItem.active === false ? "suspended" : "active")) as UserStatus;
+}
+
 function AdminPage() {
   const { profile, adminCreateUser } = useAuth();
   const { data: requests } = useCollection<ChangeRequest>("change_requests", [
@@ -81,6 +86,7 @@ function AdminPage() {
   const [role, setRole] = useState<Role>("member");
   const [creating, setCreating] = useState(false);
   const [actingUid, setActingUid] = useState<string | null>(null);
+  const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null);
 
   const memberMap = useMemo(
     () => new Map(members.map((member) => [member.uid || member.id, member])),
@@ -143,30 +149,57 @@ function AdminPage() {
     try {
       const nextActive = nextStatus === "active";
       const timestamp = Date.now();
-      await setDocIn("users", userItem.uid, {
-        status: nextStatus,
-        active: nextActive,
-        suspendedAt: nextStatus === "suspended" ? timestamp : null,
-        removedAt: nextStatus === "removed" ? timestamp : null,
-        updatedAt: timestamp,
-      });
+
+      // Write the account status and the linked member record together so a
+      // mid-flight failure can never leave one flipped and the other not
+      // (previously suspending a user could succeed on `users/{uid}` and
+      // fail on `members/{id}`, leaving billing/meal pages still treating
+      // them as active while user-management showed suspended).
+      const batch = writeBatch(db);
+      batch.set(
+        doc(db, "users", userItem.uid),
+        {
+          status: nextStatus,
+          active: nextActive,
+          suspendedAt: nextStatus === "suspended" ? timestamp : null,
+          removedAt: nextStatus === "removed" ? timestamp : null,
+          updatedAt: timestamp,
+        },
+        { merge: true },
+      );
 
       const relatedMember = memberMap.get(userItem.uid);
       if (relatedMember) {
-        await setDocIn("members", relatedMember.id, {
-          active: nextActive,
-          status:
-            nextStatus === "active"
-              ? "active"
-              : nextStatus === "suspended"
-                ? "suspended"
-                : "inactive",
-          role: userItem.role,
-          uid: userItem.uid,
-          name: userItem.name,
-          email: userItem.email,
-        });
+        batch.set(
+          doc(db, "members", relatedMember.id),
+          {
+            active: nextActive,
+            status:
+              nextStatus === "active"
+                ? "active"
+                : nextStatus === "suspended"
+                  ? "suspended"
+                  : "inactive",
+            role: userItem.role,
+            uid: userItem.uid,
+            name: userItem.name,
+            email: userItem.email,
+          },
+          { merge: true },
+        );
       }
+
+      await batch.commit();
+
+      await logActivity({
+        type: "user_status",
+        entity: "users",
+        entityId: userItem.uid,
+        action: nextStatus,
+        actor,
+        message: `${actor.name} set ${userItem.name} (${userItem.email || userItem.uid}) to ${nextStatus}`,
+        meta: { previousStatus: currentStatusOf(userItem), nextStatus },
+      });
 
       toast.success(
         nextStatus === "active"
@@ -335,10 +368,7 @@ function AdminPage() {
                     </TableRow>
                   ) : (
                     users.map((userItem) => {
-                      const currentStatus = (userItem.status ||
-                        (userItem.active === false
-                          ? "suspended"
-                          : "active")) as UserStatus;
+                      const currentStatus = currentStatusOf(userItem);
                       const busy = actingUid === userItem.uid;
 
                       return (
@@ -433,7 +463,9 @@ function AdminPage() {
                 No pending requests right now.
               </div>
             ) : (
-              pending.map((request) => (
+              pending.map((request) => {
+                const reviewing = reviewingRequestId === request.id;
+                return (
                 <div key={request.id} className="rounded-lg border p-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge>{request.collectionName}</Badge>
@@ -447,12 +479,16 @@ function AdminPage() {
                   <div className="mt-4 flex gap-2">
                     <Button
                       size="sm"
+                      disabled={reviewing}
                       onClick={async () => {
+                        setReviewingRequestId(request.id);
                         try {
                           await applyApprovedRequest(request, actor);
                           toast.success("Request approved");
                         } catch (error) {
                           toast.error((error as Error).message);
+                        } finally {
+                          setReviewingRequestId(null);
                         }
                       }}
                     >
@@ -462,12 +498,16 @@ function AdminPage() {
                     <Button
                       size="sm"
                       variant="outline"
+                      disabled={reviewing}
                       onClick={async () => {
+                        setReviewingRequestId(request.id);
                         try {
                           await rejectRequest(request, actor);
                           toast.success("Request rejected");
                         } catch (error) {
                           toast.error((error as Error).message);
+                        } finally {
+                          setReviewingRequestId(null);
                         }
                       }}
                     >
@@ -476,7 +516,8 @@ function AdminPage() {
                     </Button>
                   </div>
                 </div>
-              ))
+                );
+              })
             )}
           </div>
         </Card>

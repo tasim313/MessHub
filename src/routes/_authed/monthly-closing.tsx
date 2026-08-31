@@ -24,13 +24,11 @@ import {
   type Staff,
   type Room,
 } from "@/lib/data";
-import type { Expense, ExpenseAllocation } from "@/lib/types";
+import type { Expense, ExpenseAllocation, Advance, AdvanceRecovery, CreditNote, Refund } from "@/lib/types";
 import { computeMonthly } from "@/lib/calc";
 import { ymKey, bdt } from "@/lib/format";
-import { calculateMonthlyClosing } from "@/lib/calculations/monthly-closing";
-import { calculateAllSettlements, calculateMemberSettlement } from "@/lib/calculations/engine";
 import { calculateMemberToMemberSettlements, consolidateSettlements } from "@/lib/financial-engine";
-import { generateRentChargesForMonth } from "@/lib/transaction";
+import { ensureRentChargesUpToDate } from "@/lib/rent-service";
 import { cleanupAllDuplicateCharges } from "@/lib/duplicate-check";
 import { MonthPicker } from "@/components/ui/month-picker";
 import {
@@ -41,7 +39,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { MonthlyClosing, RentCharge, Deposit, Credit, Payment } from "@/lib/types";
+import type { MonthlyClosing, RentCharge, Deposit, Credit, Payment, LedgerEntry } from "@/lib/types";
 
 export const Route = createFileRoute("/_authed/monthly-closing")({
   component: MonthlyClosingPage,
@@ -63,7 +61,12 @@ function MonthlyClosingPage() {
     orderBy("createdAt", "desc"),
   ]);
   const { data: rentCharges } = useCollection<RentCharge>("rent_charges");
+  const { data: allLedgers } = useCollection<LedgerEntry>("ledgers");
   const { data: allocations } = useCollection<ExpenseAllocation>("expense_allocations", [orderBy("createdAt", "desc")]);
+  const { data: advances } = useCollection<Advance>("advances");
+  const { data: advanceRecoveries } = useCollection<AdvanceRecovery>("advance_recoveries");
+  const { data: creditNotes } = useCollection<CreditNote>("credit_notes");
+  const { data: refunds } = useCollection<Refund>("refunds");
 
   const monthBazar = useMemo(() => bazar.filter((b) => b.ym === ym), [bazar, ym]);
   const monthExpenses = useMemo(() => expenses.filter((e) => e.ym === ym), [expenses, ym]);
@@ -96,8 +99,11 @@ function MonthlyClosingPage() {
 
   const monthSummary = useMemo(
     () =>
-      computeMonthly(ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms, [], prevClosings, monthAllocations),
-    [ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms, prevClosings, monthAllocations],
+      computeMonthly(
+        ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms, [],
+        prevClosings, monthAllocations, advances, advanceRecoveries, closings, creditNotes, refunds,
+      ),
+    [ym, members, meals, bazar, expenses, deposits, credits, payments, staff, rooms, prevClosings, monthAllocations, advances, advanceRecoveries, closings, creditNotes, refunds],
   );
 
   const existingClosing = useMemo(
@@ -110,24 +116,33 @@ function MonthlyClosingPage() {
     [rentCharges, ym],
   );
 
-  const monthMeals = useMemo(() => meals.filter((m) => m.ym === ym), [meals, ym]);
-
+  // Derived directly from monthSummary (the same v2 engine used for the
+  // persisted closing payload below) so the confirmation dialog and KPI
+  // cards can never show different numbers than what actually gets saved.
   const closingData = useMemo(() => {
-    const year = parseInt(ym.split("-")[0], 10);
-    return calculateMonthlyClosing(
-      members,
-      ym,
-      year,
-      monthRentCharges,
-      deposits.filter((d) => d.ym === ym),
-      credits.filter((c) => c.ym === ym),
-      payments.filter((p) => p.ym === ym),
-      monthBazar,
-      monthExpenses,
-      activeStaff,
-      monthMeals, // Fixed: pass meals to calculate meal rate correctly
-    );
-  }, [ym, members, monthRentCharges, deposits, credits, payments, monthBazar, monthExpenses, activeStaff, monthMeals]);
+    const totalRent = monthSummary.totalRent;
+    const totalCollection = monthSummary.totalPayments;
+    const totalIncome = totalRent + totalCollection;
+    const totalExpense = monthSummary.totalExpense;
+    const netProfit = totalIncome - totalExpense;
+    const totalDue = monthSummary.perMember.reduce((s, p) => s + Math.max(0, -p.balance), 0);
+    return {
+      totalIncome,
+      totalExpense,
+      netProfit,
+      totalRent,
+      totalMeal: monthSummary.totalBazar,
+      totalUtility: monthSummary.totalUtilities,
+      totalStaff: monthSummary.totalStaffCost,
+      totalDeposit: monthSummary.totalDeposits,
+      totalCredit: monthSummary.totalCredits,
+      totalCollection,
+      totalDue,
+      mealRate: monthSummary.mealRate,
+      totalMeals: monthSummary.totalMeals,
+      totalBazar: monthSummary.totalBazar,
+    };
+  }, [monthSummary]);
 
   const [open, setOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -136,8 +151,11 @@ function MonthlyClosingPage() {
     if (!profile) return;
     setGenerating(true);
     try {
-      const result = await generateRentChargesForMonth(ym, members, rooms);
-      toast.success(`Generated ${result.created} rent charges (${result.skipped} already existed)`);
+      // Backfills every missing month (not just the one currently selected)
+      // for every active member — the same logic that runs automatically on
+      // every session, exposed here for an immediate manual re-check.
+      const result = await ensureRentChargesUpToDate(members, rooms, rentCharges, allLedgers, profile.uid);
+      toast.success(result.created > 0 ? `Generated rent for ${result.months.join(", ")}` : "Rent is already up to date");
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -378,7 +396,7 @@ function MonthlyClosingPage() {
                         <div className="flex justify-between text-sm font-bold border-t pt-2">
                           <span>Net Profit/Loss</span>
                           <span className={closingData.netProfit >= 0 ? "text-primary" : "text-destructive"}>
-                            {bdt(closingData.netProfit)}
+                            {closingData.netProfit >= 0 ? "Profit " : "Loss "}{bdt(Math.abs(closingData.netProfit))}
                           </span>
                         </div>
                       </div>
@@ -503,7 +521,7 @@ function MonthlyClosingPage() {
                 <div className="flex justify-between text-sm font-bold">
                   <span>Net Profit/Loss</span>
                   <span className={closingData.netProfit >= 0 ? "text-primary" : "text-destructive"}>
-                    {bdt(closingData.netProfit)}
+                    {closingData.netProfit >= 0 ? "Profit " : "Loss "}{bdt(Math.abs(closingData.netProfit))}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
@@ -602,7 +620,7 @@ function MonthlyClosingPage() {
                          <td className="p-3 text-right tabular-nums text-primary">{bdt(p.deposited)}</td>
                          <td className="p-3 text-right tabular-nums text-destructive">{bdt(p.credited)}</td>
                          <td className={`p-3 text-right tabular-nums font-bold ${p.balance >= 0 ? "text-primary" : "text-destructive"}`}>
-                           {bdt(p.balance)}
+                           {p.balance >= 0 ? "Deposit " : "Due "}{bdt(Math.abs(p.balance))}
                          </td>
                          <td className="p-3 text-center">
                            <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${

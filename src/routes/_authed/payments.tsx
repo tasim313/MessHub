@@ -43,6 +43,7 @@ function PaymentsPage() {
   const { data: members } = useCollection<Member>("members");
   const { data: payments } = useCollection<Payment>("payments", [orderBy("date", "desc")]);
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<Payment | null>(null);
   const [form, setForm] = useState({ memberId: "", amount: "", method: "Cash", date: dayKey(), status: "paid" as Payment["status"], referenceNo: "", notes: "", category: "" });
 
@@ -148,12 +149,31 @@ function PaymentsPage() {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
     const member = members.find((m) => (m.uid || m.id) === form.memberId);
     if (!member) return toast.error("Pick a member");
     const amount = parseFloat(form.amount);
     if (!amount || amount <= 0) return toast.error("Enter amount");
     if (form.referenceNo && await checkPaymentReferenceExists(form.referenceNo, form.date)) return toast.error("Payment with this reference already exists for this date");
 
+    // A matching reference number is blocked outright above (it's meant to
+    // be unique). Same member+date+amount with no reference is only a
+    // likely duplicate, not a certain one — show it and let the user decide
+    // rather than silently inserting or hard-blocking a legitimate second
+    // payment that happens to match.
+    if (!editing) {
+      const existing = payments.find(
+        (p) => p.memberId === form.memberId && p.date === form.date && Math.abs(p.amount - amount) < 0.01,
+      );
+      if (existing) {
+        const confirmed = confirm(
+          `${member.name} already has a payment of ৳${existing.amount} recorded on ${form.date} (${existing.notes || existing.method}). Add another one anyway?`,
+        );
+        if (!confirmed) return;
+      }
+    }
+
+    setSaving(true);
     try {
       if (profile?.role === "owner" && editing) {
         await updateDocIn("payments", editing.id, {
@@ -189,8 +209,8 @@ function PaymentsPage() {
         if (result.advanceRecoveryAmount > 0) {
           msg += ` - recovered ${bdt(result.advanceRecoveryAmount)} from advances`;
         }
-        if (result.chargePaymentAmount > 0) {
-          msg += ` - ${bdt(result.chargePaymentAmount)} applied to charges`;
+        if (result.chargeAllocations.length > 0) {
+          msg += ` - ${bdt(result.chargeAllocations.reduce((s, a) => s + a.amount, 0))} applied to ${result.chargeAllocations.length} charge(s)`;
         }
         if (result.remainingAmount > 0) {
           msg += ` - ${bdt(result.remainingAmount)} becomes deposit`;
@@ -224,6 +244,7 @@ function PaymentsPage() {
       setOpen(false);
       resetForm();
     } catch (err) { toast.error((err as Error).message); }
+    finally { setSaving(false); }
   };
 
   return (
@@ -251,7 +272,7 @@ function PaymentsPage() {
                 </div>
                 <div className="space-y-2"><Label>Reference</Label><Input value={form.referenceNo} onChange={(e) => setForm({ ...form, referenceNo: e.target.value })} placeholder="TrxID or ref #" /></div>
                 <div className="space-y-2"><Label>Notes</Label><Textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
-                <DialogFooter><Button type="submit">Save</Button></DialogFooter>
+                <DialogFooter><Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save"}</Button></DialogFooter>
               </form>
             </DialogContent>
           </Dialog>

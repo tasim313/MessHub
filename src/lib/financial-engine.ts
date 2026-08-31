@@ -201,6 +201,22 @@ export interface AccountingEquationBreakdown {
   outstandingDues: number;
   /** Difference: should be 0 if balanced */
   difference: number;
+  /**
+   * Independent source reconciliation: sum of what members were actually
+   * charged for meals/expenses/staff must match the real source totals
+   * (totalBazar/totalExpenses/totalStaffCost). Unlike the money-given vs
+   * money-allocated identity above (which balances by construction), this
+   * catches real bugs like an expense getting split among zero members.
+   */
+  sourceReconciliation: {
+    mealChargesTotal: number;
+    totalBazar: number;
+    expenseChargesTotal: number;
+    totalExpenses: number;
+    staffChargesTotal: number;
+    totalStaffCost: number;
+    reconciled: boolean;
+  };
   /** Per-member breakdown */
   perMemberBreakdown: {
     memberId: string;
@@ -877,8 +893,11 @@ export function calculateSeparateAccounting(
   rentCharges: RentCharge[],
   monthAllocations: ExpenseAllocation[],
 ): SeparateAccountingResult {
-  // Rent
-  const rentChg = rentCharges.filter((r) => r.month === ym).reduce((s, r) => s + (r.amount || 0), 0);
+  // Rent (rent_charges collection + any expense explicitly recorded as house_rent,
+  // which sharedChg below deliberately excludes to avoid double-counting it)
+  const rentChg =
+    rentCharges.filter((r) => r.month === ym).reduce((s, r) => s + (r.amount || 0), 0) +
+    monthExpenses.filter((e) => e.category === "house_rent").reduce((s, e) => s + (e.amount || 0), 0);
   const rentPay = monthPayments.filter((p) => (p.category || "").toLowerCase() === "rent").reduce((s, p) => s + (p.amount || 0), 0);
 
   // Bazaar
@@ -1050,6 +1069,16 @@ export function runVerificationChecklist(
       `Dues (৳${accountingBreakdown.outstandingDues}). Difference: ৳${accountingBreakdown.difference}`
     );
   }
+  if (!accountingBreakdown.sourceReconciliation.reconciled) {
+    const sr = accountingBreakdown.sourceReconciliation;
+    errors.push(
+      `SOURCE RECONCILIATION FAILED: charges billed to members don't match real source totals — ` +
+      `meal charges ৳${sr.mealChargesTotal} vs bazar ৳${sr.totalBazar}, ` +
+      `expense charges ৳${sr.expenseChargesTotal} vs expenses ৳${sr.totalExpenses}, ` +
+      `staff charges ৳${sr.staffChargesTotal} vs staff cost ৳${sr.totalStaffCost}. ` +
+      `Likely cause: an expense/staff cost has no subscribed members or missing allocations.`
+    );
+  }
 
   return {
     allRecordsVerified: errors.length === 0,
@@ -1142,11 +1171,25 @@ export function verifyAccountingEquation(
   // + remaining credits (money still owed by members who underpaid)
   // Since totalCharges = totalAllocated + outstanding, and deposits + credits should net out:
   // Total Given = totalCharges should hold if all money is accounted for
+  // NOTE: this identity holds by construction (moneyAllocated is defined as
+  // min(charges, given)), so on its own it can never detect a wrong charge
+  // total — e.g. an expense split among zero subscribers. The independent
+  // sourceReconciliation check below is what actually catches that class of bug.
   const rightSide = round(totalMoneyAllocated + remainingDeposits);
   const difference = round(totalMoneyGiven - rightSide);
+  const identityBalanced = Math.abs(difference) <= 1;
 
-  // Allow small rounding tolerance (৳1)
-  const balanced = Math.abs(difference) <= 1;
+  // Independent reconciliation: what members were actually charged for each
+  // category must match the real source totals for that category.
+  const mealChargesTotal = round(summary.members.reduce((s, m) => s + (m.mealCost || 0), 0));
+  const expenseChargesTotal = round(summary.members.reduce((s, m) => s + (m.expenseShares || 0), 0));
+  const staffChargesTotal = round(summary.members.reduce((s, m) => s + (m.staffShare || 0), 0));
+  const sourceReconciled =
+    Math.abs(mealChargesTotal - summary.totalBazar) <= 1 &&
+    Math.abs(expenseChargesTotal - summary.totalExpenses) <= 1 &&
+    Math.abs(staffChargesTotal - summary.totalStaffCost) <= 1;
+
+  const balanced = identityBalanced && sourceReconciled;
 
   return {
     balanced,
@@ -1156,6 +1199,15 @@ export function verifyAccountingEquation(
     remainingCredits: round(remainingCredits),
     outstandingDues: round(outstandingDues),
     difference: round(difference),
+    sourceReconciliation: {
+      mealChargesTotal,
+      totalBazar: round(summary.totalBazar),
+      expenseChargesTotal,
+      totalExpenses: round(summary.totalExpenses),
+      staffChargesTotal,
+      totalStaffCost: round(summary.totalStaffCost),
+      reconciled: sourceReconciled,
+    },
     perMemberBreakdown,
   };
 }

@@ -65,6 +65,7 @@ function MembersPage() {
   const { data: rooms } = useCollection<Room>("rooms");
   const { data: utilities } = useCollection<Utility>("utilities");
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<Member | null>(null);
   
   // Get unique utility types from utilities table
@@ -180,6 +181,50 @@ function MembersPage() {
   };
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
+
+    // Prevent double-booking the same bed: two active members should never
+    // silently share one roomId+bedNo (roomId/bedNo were plain mutable
+    // fields with no reservation check, so nothing stopped this before).
+    if (form.active && form.roomId && form.bedNo) {
+      const conflict = members.find(
+        (m) =>
+          m.active &&
+          m.id !== editing?.id &&
+          m.roomId === form.roomId &&
+          m.bedNo === form.bedNo,
+      );
+      if (conflict) {
+        toast.error(`Bed ${form.bedNo} in this room is already occupied by ${conflict.name}`);
+        return;
+      }
+    }
+
+    // Prevent assigning a room beyond its bed capacity.
+    if (form.active && form.roomId) {
+      const room = rooms.find((r) => r.id === form.roomId);
+      if (room?.totalBeds) {
+        const occupantCount = members.filter(
+          (m) => m.active && m.id !== editing?.id && m.roomId === form.roomId,
+        ).length;
+        if (occupantCount >= room.totalBeds) {
+          toast.error(`Room ${room.roomNo} is already at full capacity (${room.totalBeds} beds)`);
+          return;
+        }
+      }
+    }
+
+    // Never trust the HTML min="0" alone — clamp every money figure to a
+    // non-negative value before it's ever saved.
+    const form_ = {
+      ...form,
+      monthlyRent: Math.max(0, Number(form.monthlyRent) || 0),
+      depositAmount: Math.max(0, Number(form.depositAmount) || 0),
+      securityDeposit: Math.max(0, Number(form.securityDeposit) || 0),
+      previousDue: Math.max(0, Number(form.previousDue) || 0),
+    };
+
+    setSaving(true);
     try {
       if (profile?.role === "owner" && editing) {
         if (
@@ -190,7 +235,7 @@ function MembersPage() {
           toast.error("Owner role cannot be downgraded from this screen");
           return;
         }
-        await updateDocIn("members", editing.id, form);
+        await updateDocIn("members", editing.id, form_);
         // The Firestore security rules read the role from users/{uid}, not
         // members/{id}. Sync the new role so the user's permissions actually
         // change (e.g. member -> owner/manager).
@@ -199,7 +244,7 @@ function MembersPage() {
         }
         toast.success("Member updated");
       } else if (profile?.role === "owner") {
-        await addDocTo("members", { ...form, joinedAt: Date.now() });
+        await addDocTo("members", { ...form_, joinedAt: Date.now() });
         toast.success("Member added");
       } else if (profile) {
         await submitChangeRequest({
@@ -208,7 +253,7 @@ function MembersPage() {
           title: `${editing ? "Update" : "Add"} member ${form.name}`,
           actor: { uid: profile.uid, name: profile.name, role: profile.role },
           targetId: editing?.id,
-          payload: editing ? form : { ...form, joinedAt: Date.now() },
+          payload: editing ? form_ : { ...form_, joinedAt: Date.now() },
           previousData: editing || null,
         });
         toast.success("Request sent to admin for approval");
@@ -217,6 +262,8 @@ function MembersPage() {
       reset();
     } catch (err) {
       toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
     }
   };
   const onDelete = async (m: Member) => {
@@ -580,7 +627,7 @@ function MembersPage() {
                      </div>
                    </div>
                   <DialogFooter>
-                    <Button type="submit">{editing ? "Save" : "Add"}</Button>
+                    <Button type="submit" disabled={saving}>{saving ? "Saving..." : editing ? "Save" : "Add"}</Button>
                   </DialogFooter>
                 </form>
               </DialogContent>

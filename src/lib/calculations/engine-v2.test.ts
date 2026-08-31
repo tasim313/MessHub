@@ -415,13 +415,20 @@ describe("calculateMemberMonthlySummary", () => {
     // Bazar contribution: 500 + 700 = 1200
     expect(result.bazarContribution).toBe(1200);
 
-    // Total contributions: 1200 (bazar) + 1000 (paid internet) = 2200
-    expect(result.totalContributions).toBeCloseTo(2200, 1);
+    // Expense contribution: paid the 1000 internet bill, but only the EXCESS
+    // beyond A's own share (333.33) counts as a contribution here — A's own
+    // share is already reflected via an internal "own share paid" Payment
+    // (paymentContributions), so counting the full 1000 would double-count
+    // that portion. Excess = 1000 - 333.33 = 666.67.
+    expect(result.expenseContributions).toBeCloseTo(666.67, 1);
 
-    // Balance: 2200 - 10083.33 = -7883.33 (member owes mess)
-    expect(result.balance).toBeCloseTo(-7883.33, 1);
+    // Total contributions: 1200 (bazar) + 666.67 (expense excess) + 0 (no payments for A) = 1866.67
+    expect(result.totalContributions).toBeCloseTo(1866.67, 1);
+
+    // Balance: 1866.67 - 10083.33 = -8216.66 (member owes mess)
+    expect(result.balance).toBeCloseTo(-8216.66, 1);
     expect(result.settlementStatus).toBe("pay");
-    expect(result.creditAmount).toBeCloseTo(7883.33, 1);
+    expect(result.creditAmount).toBeCloseTo(8216.66, 1);
   });
 });
 

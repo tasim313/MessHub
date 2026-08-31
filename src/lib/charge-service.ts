@@ -36,7 +36,7 @@ import type { Member, Expense, ExpenseAllocation, Room, Staff } from "./types";
 import { EXPENSE_CATEGORY_LABELS } from "./types";
 import { calculateMemberExpenseShares, calculateMemberStaffShare } from "./calculations/engine-v2";
 import { createAdvance } from "./advance-service";
-import { checkLedgerChargeExists, checkExpenseAllocationExists, checkPaymentReferenceExists } from "./duplicate-check";
+import { checkLedgerChargeExists, checkInternalPaymentExists, checkPaymentReferenceExists } from "./duplicate-check";
 
 // ============================================================================
 // 1. GENERATE CHARGES FROM A SHARED EXPENSE
@@ -124,8 +124,11 @@ export async function generateChargesFromExpense(
     const payer = activeMembers.find((m) => m.id === expense.paidBy);
 
     if (payer && payerShare > 0) {
-      // Check if payment already exists
-      const paymentExists = await checkExpenseAllocationExists(expense.id, expense.paidBy);
+      // Check if the internal auto-payment already exists (NOT the same as
+      // checkExpenseAllocationExists — that always returns true here since
+      // every member's allocation, including the payer's, was just created
+      // in the loop above, which would silently skip this payment forever)
+      const paymentExists = await checkInternalPaymentExists(expense.id, expense.paidBy);
       if (!paymentExists) {
         // Record internal payment - payer's own share is auto-paid
         await addDoc(collection(db, "payments"), {
@@ -192,16 +195,23 @@ function calculateExpenseAllocationsForExpense(
   activeMembers: Member[],
 ): Omit<ExpenseAllocation, "id" | "createdAt" | "createdBy">[] {
   const serviceType = getServiceTypeForExpenseCategory(expense.category);
-  const subscribers = serviceType
+  let subscribers = serviceType
     ? activeMembers.filter((m) => isMemberSubscribedToService(m, serviceType))
     : activeMembers;
+  if (serviceType && subscribers.length === 0) {
+    // Nobody has explicitly subscribed — don't let the expense vanish from
+    // everyone's charges. Fall back to every active member who hasn't
+    // explicitly opted out.
+    subscribers = activeMembers.filter((m) => !isMemberExplicitlyOptedOut(m, serviceType));
+    if (subscribers.length === 0) subscribers = activeMembers;
+  }
 
   const totalSubscribers = subscribers.length || 1;
   const amount = expense.amount || 0;
 
   return activeMembers.map((member) => {
     const isSubscribed = serviceType
-      ? isMemberSubscribedToService(member, serviceType)
+      ? subscribers.some((m) => m.id === member.id) && !isMemberExplicitlyOptedOut(member, serviceType)
       : true;
 
     if (!isSubscribed) {
@@ -247,6 +257,11 @@ function calculateExpenseAllocationsForExpense(
       dueAmount: Math.round(memberAmount * 100) / 100,
     };
   });
+}
+
+function isMemberExplicitlyOptedOut(member: Member, serviceType: string): boolean {
+  if (!member.services) return false;
+  return member.services.some((s) => s.type === serviceType && s.enabled === false);
 }
 
 function isMemberSubscribedToService(member: Member, serviceType: string): boolean {
@@ -428,9 +443,16 @@ function calculateMemberStaffShareFromService(
   let staffShare = 0;
   activeStaff.forEach((s) => {
     const serviceType = STAFF_SERVICE_MAP[s.role] || "other_services";
-    if (!isMemberSubscribedToService(member, serviceType)) return;
-    const subscribers = activeMembers.filter((m) => isMemberSubscribedToService(m, serviceType)).length || 1;
-    staffShare += (s.salary || 0) / subscribers;
+    if (isMemberExplicitlyOptedOut(member, serviceType)) return;
+    let subscribers = activeMembers.filter((m) => isMemberSubscribedToService(m, serviceType));
+    if (subscribers.length === 0) {
+      subscribers = activeMembers.filter((m) => !isMemberExplicitlyOptedOut(m, serviceType));
+      if (subscribers.length === 0) subscribers = activeMembers;
+    }
+    if (!subscribers.some((m) => m.id === member.id)) return;
+    const totalSubscribers = subscribers.length || 1;
+    const staffCost = (s.salary || 0) + (s.overtime || 0) + (s.bonus || 0) - (s.advance || 0);
+    staffShare += staffCost / totalSubscribers;
   });
 
   return staffShare;

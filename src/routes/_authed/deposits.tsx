@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { MonthPicker } from "@/components/ui/month-picker";
 import { toast } from "sonner";
-import type { Deposit, Credit, Payment, Expense, ExpenseAllocation } from "@/lib/types";
+import type { Deposit, Credit, Payment, Expense, ExpenseAllocation, MonthlyClosing, CreditNote, Refund } from "@/lib/types";
 import { calculateAllSettlements, getSettlementSummary, type MemberSettlement } from "@/lib/calculations/engine";
 import { Link } from "@tanstack/react-router";
 
@@ -42,6 +42,9 @@ function DepositsPage() {
   const { data: staff } = useCollection<Staff>("staff");
   const { data: ledgers } = useCollection<LedgerEntry>("ledgers");
   const { data: allocations } = useCollection<ExpenseAllocation>("expense_allocations", [orderBy("createdAt", "desc")]);
+  const { data: closings } = useCollection<MonthlyClosing>("monthly_closing", [orderBy("createdAt", "desc")]);
+  const { data: creditNotes } = useCollection<CreditNote>("credit_notes");
+  const { data: refunds } = useCollection<Refund>("refunds");
 
   const now = new Date();
   const currentYear = now.getFullYear();
@@ -92,16 +95,36 @@ function DepositsPage() {
     });
   }, [allocations, currentYm, hasMonthSelected, expenses, filterDateFrom, filterDateTo]);
 
+  // Build carry-forward balances from the previous month's closing (if any)
+  const prevClosings = useMemo(() => {
+    if (!hasMonthSelected || !closings.length) return [];
+    const [year, month] = currentYm.split("-").map(Number);
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const prevYear = month === 1 ? year - 1 : year;
+    const prevYm = `${prevYear}-${String(prevMonth).padStart(2, "0")}`;
+    const prevClosing = closings.find((c) => c.month === prevYm);
+    if (!prevClosing || prevClosing.status !== "closed") return [];
+    const breakdown = (prevClosing as any).memberBreakdown || {};
+    return Object.entries(breakdown).map(([memberId, data]: [string, any]) => ({
+      month: prevYm,
+      memberId,
+      deposit: data.deposit || 0,
+      credit: data.credit || 0,
+    }));
+  }, [hasMonthSelected, currentYm, closings]);
+
   // Compute settlements with unified formula
   const settlements = useMemo(() => {
     const monthExpenses = expenses.filter((e) => hasMonthSelected ? e.ym === currentYm : e.date >= filterDateFrom && e.date <= filterDateTo);
     return calculateAllSettlements(
       members, currentYm, meals, bazar, deposits, credits,
       payments, ledgers, monthExpenses, rooms, staff,
-      [],
+      prevClosings,
       monthAllocations,
+      creditNotes,
+      refunds,
     );
-  }, [currentYm, members, meals, bazar, expenses, deposits, credits, payments, ledgers, rooms, staff, hasMonthSelected, filterDateFrom, filterDateTo, monthAllocations]);
+  }, [currentYm, members, meals, bazar, expenses, deposits, credits, payments, ledgers, rooms, staff, hasMonthSelected, filterDateFrom, filterDateTo, monthAllocations, prevClosings, creditNotes, refunds]);
 
   // Filter by status
   const membersWithDeposits = useMemo(() => {
@@ -415,7 +438,7 @@ function DepositsPage() {
                       <td className={`p-3 text-right tabular-nums font-bold ${
                         s.balance > 0 ? "text-primary" : s.balance < 0 ? "text-destructive" : ""
                       }`}>
-                        {bdt(s.balance)}
+                        {s.balance > 0 ? "Deposit " : s.balance < 0 ? "Due " : ""}{bdt(Math.abs(s.balance))}
                       </td>
                       <td className="p-3 text-center">
                         <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
