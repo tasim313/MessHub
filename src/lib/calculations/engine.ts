@@ -578,9 +578,17 @@ export function calculateMemberContributions(
     }
   });
 
-  // 3. All payments made by the member ARE contributions
-  // This includes rent, meals, utilities, and any other payments
-  const allPayments = monthPayments.filter((p) => p.memberId === memberId);
+  // 3. All payments made by the member ARE contributions — EXCEPT the
+  // internal "own share auto-paid" Payment document createExpenseWithAccounting
+  // records whenever this member fronted an expense (referenceType "expense").
+  // That document exists only to mark their own share as settled; it was
+  // never real money entering the mess's pool, and their own share was
+  // already excluded from being a charge in calculateMemberCharges below —
+  // counting it here too would make it look like a real payment with
+  // nothing on the charge side left to offset, inflating this member's
+  // Total Contributions (and every category breakdown built from it) by
+  // exactly that self-settled amount.
+  const allPayments = monthPayments.filter((p) => p.memberId === memberId && p.referenceType !== "expense");
   const paymentsMade = allPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
 
   // 4. Categorize payments by type for detailed breakdown
@@ -677,6 +685,16 @@ export function calculateMemberCharges(
 
   expenseIds.forEach((expenseId) => {
     const allocationsForExpense = monthAllocations.filter((a) => a.expenseId === expenseId);
+
+    // A member's own share of an expense they personally fronted is settled
+    // immediately via an internal auto-payment (see createExpenseWithAccounting)
+    // and never gets a ledger charge of its own — so it must not appear here
+    // as an outstanding charge either. Counting it would double against that
+    // same amount having just been excluded from paymentsMade in
+    // calculateMemberContributions, inflating this category's total (and
+    // Total Charges) by an amount the member already paid themselves.
+    const expenseForId = monthExpenses.find((e) => e.id === expenseId);
+    if (expenseForId && expenseForId.paidBy === member.id) return;
 
     if (allocationsForExpense.length > 0) {
       const memberAlloc = allocationsForExpense.find((a) => a.memberId === member.id);
