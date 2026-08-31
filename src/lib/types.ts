@@ -229,6 +229,9 @@ export interface Expense {
   allocationMethod: AllocationMethod;
   // Fixed amount per member, used when allocationMethod === "fixed"
   fixedAmount?: number;
+  // Set when this expense was auto-generated from a RecurringBill template —
+  // used to guard against generating the same month's bill twice.
+  recurringBillId?: string;
   // Per-member percentage split (memberId -> percent 0-100), used when
   // allocationMethod === "custom_percentage"
   customPercentages?: Record<string, number>;
@@ -671,6 +674,25 @@ export interface Refund {
   voidedReason?: string;
   voidedBy?: string;
   voidedAt?: number;
+  createdBy?: string;
+  createdAt?: number;
+}
+
+/**
+ * A recurring monthly bill template (rent is handled separately via Rooms;
+ * this covers fixed-amount bills like water, internet, garbage collection,
+ * etc. that don't otherwise have a stored monthly amount anywhere). Once
+ * active, the actual Expense document for the current month is generated
+ * automatically — this template is never itself the accounting record, it
+ * only describes what to generate.
+ */
+export interface RecurringBill {
+  id: string;
+  category: ExpenseCategory;
+  label: string;
+  amount: number;
+  allocationMethod: AllocationMethod;
+  active: boolean;
   createdBy?: string;
   createdAt?: number;
 }

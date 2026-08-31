@@ -129,6 +129,36 @@ service cloud.firestore {
       allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
     }
 
+    // Shared expenses (water/electricity/internet/garbage/etc.) and the
+    // records createExpenseWithAccounting() derives from them: per-member
+    // allocations and any advance created when a payer overpays their share.
+    match /expenses/{expenseId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager();
+      allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
+    }
+
+    match /expense_allocations/{allocationId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager();
+      allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
+    }
+
+    match /advances/{advanceId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager();
+      allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
+    }
+
+    // Recurring bill templates (water/internet/garbage/etc.) that the
+    // auto-generation service turns into real expenses on the 1st of each
+    // month — see ensureRecurringExpensesUpToDate in recurring-bill-service.ts.
+    match /recurring_bills/{billId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager();
+      allow update, delete: if isOwner() || (isManager() && isDocumentOwner());
+    }
+
     match /deposits/{depositId} {
       allow read: if isSignedIn();
       allow create: if isOwnerOrManager() || isUser();

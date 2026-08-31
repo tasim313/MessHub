@@ -16,12 +16,12 @@ import {
 import { dayKey, bdt, ymKey } from "@/lib/format";
 import {
   Plus, Trash2, Pencil, Receipt, Loader2, User,
-  Search, X, Calendar, Filter, RotateCcw,
+  Search, X, Calendar, Filter, RotateCcw, Repeat, Power, PowerOff,
 } from "lucide-react";
 import { MonthPicker } from "@/components/ui/month-picker";
 import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
-import type { Expense, ExpenseCategory, ExpenseStatus, AllocationMethod, ExpenseAllocation } from "@/lib/types";
+import type { Expense, ExpenseCategory, ExpenseStatus, AllocationMethod, ExpenseAllocation, RecurringBill } from "@/lib/types";
 import { EXPENSE_CATEGORY_LABELS, EXPENSE_CATEGORY_TO_SERVICE } from "@/lib/types";
 import { createExpenseWithAccounting } from "@/lib/workflow-integration";
 
@@ -38,9 +38,92 @@ function ExpensesPage() {
   const { can, profile } = useAuth();
   const { data: expenses } = useCollection<Expense>("expenses", [orderBy("date", "desc")]);
   const { data: members } = useCollection<Member>("members");
+  const { data: recurringBills } = useCollection<RecurringBill>("recurring_bills");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const canManageRecurring = profile?.role === "owner" || profile?.role === "manager";
+
+  // ────────────────────────────────────────────
+  // Recurring Bill templates (water/internet/garbage/bua/etc.) — generated
+  // into real Expense records automatically on the 1st of each month by
+  // ensureRecurringExpensesUpToDate(), which runs once per session in
+  // _authed.tsx. This UI only manages the template, never the generated bill.
+  // ────────────────────────────────────────────
+  const [recurringOpen, setRecurringOpen] = useState(false);
+  const [recurringEditing, setRecurringEditing] = useState<RecurringBill | null>(null);
+  const [recurringSaving, setRecurringSaving] = useState(false);
+  const [recurringForm, setRecurringForm] = useState({
+    category: "water" as ExpenseCategory,
+    label: "",
+    amount: "",
+    allocationMethod: "equal" as AllocationMethod,
+  });
+
+  const resetRecurringForm = () => {
+    setRecurringEditing(null);
+    setRecurringForm({ category: "water", label: "", amount: "", allocationMethod: "equal" });
+  };
+
+  const onRecurringSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (recurringSaving || !profile) return;
+    const amount = parseFloat(recurringForm.amount);
+    if (!amount || amount <= 0) return toast.error("Enter amount");
+    const label = recurringForm.label.trim() || EXPENSE_CATEGORY_LABELS[recurringForm.category];
+
+    setRecurringSaving(true);
+    try {
+      if (recurringEditing) {
+        await updateDocIn("recurring_bills", recurringEditing.id, {
+          category: recurringForm.category,
+          label,
+          amount,
+          allocationMethod: recurringForm.allocationMethod,
+        });
+        toast.success("Recurring bill updated");
+      } else {
+        await addDocTo(
+          "recurring_bills",
+          {
+            category: recurringForm.category,
+            label,
+            amount,
+            allocationMethod: recurringForm.allocationMethod,
+            active: true,
+          },
+          profile.uid,
+        );
+        toast.success(`${label} will now auto-generate every month`);
+      }
+      setRecurringOpen(false);
+      resetRecurringForm();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setRecurringSaving(false);
+    }
+  };
+
+  const toggleRecurringActive = async (bill: RecurringBill) => {
+    try {
+      await updateDocIn("recurring_bills", bill.id, { active: !bill.active });
+      toast.success(bill.active ? `${bill.label} paused` : `${bill.label} resumed`);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
+
+  const handleDeleteRecurring = async (bill: RecurringBill) => {
+    if (!confirm(`Delete recurring bill "${bill.label}"? Already-generated expenses are kept.`)) return;
+    try {
+      await deleteDocFrom("recurring_bills", bill.id);
+      toast.success("Deleted");
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
 
   // ────────────────────────────────────────────
   // Filters
@@ -427,6 +510,179 @@ function ExpensesPage() {
             <div className="text-xs text-muted-foreground mt-1">{expenses.length} total entries</div>
           </Card>
         </div>
+
+        {/* ──────────────────────────────────────────── */}
+        {/* RECURRING BILLS — auto-generated on the 1st of each month */}
+        {/* ──────────────────────────────────────────── */}
+        {canManageRecurring && (
+          <Card className="overflow-hidden">
+            <div className="p-4 border-b bg-muted/30 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold flex items-center gap-1.5">
+                  <Repeat className="h-4 w-4 text-muted-foreground" />
+                  Recurring Bills
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Water, internet, garbage, bua/staff bills — auto-generated as a real expense on the 1st of every month, ready to pay from Charges.
+                </p>
+              </div>
+              <Dialog open={recurringOpen} onOpenChange={(v) => { setRecurringOpen(v); if (!v) resetRecurringForm(); }}>
+                <DialogTrigger asChild>
+                  <Button size="sm" variant="outline">
+                    <Plus className="h-4 w-4 mr-1" />
+                    Add Recurring Bill
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>{recurringEditing ? "Edit" : "Add"} Recurring Bill</DialogTitle>
+                  </DialogHeader>
+                  <form onSubmit={onRecurringSubmit} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label>Category</Label>
+                      <Select
+                        value={recurringForm.category}
+                        onValueChange={(v) => setRecurringForm({ ...recurringForm, category: v as ExpenseCategory })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-60">
+                          {EXPENSE_CATEGORIES.map((cat) => (
+                            <SelectItem key={cat} value={cat}>
+                              {EXPENSE_CATEGORY_LABELS[cat]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Label (optional — shown on the generated bill)</Label>
+                      <Input
+                        value={recurringForm.label}
+                        onChange={(e) => setRecurringForm({ ...recurringForm, label: e.target.value })}
+                        placeholder={EXPENSE_CATEGORY_LABELS[recurringForm.category]}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-2">
+                        <Label>Monthly Amount (৳)</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={recurringForm.amount}
+                          onChange={(e) => setRecurringForm({ ...recurringForm, amount: e.target.value })}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Allocation</Label>
+                        <Select
+                          value={recurringForm.allocationMethod}
+                          onValueChange={(v) => setRecurringForm({ ...recurringForm, allocationMethod: v as AllocationMethod })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="equal">Equal Split</SelectItem>
+                            <SelectItem value="per_room">Room-Based</SelectItem>
+                            <SelectItem value="usage_based">Usage-Based</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button type="submit" disabled={recurringSaving}>
+                        {recurringSaving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                        {recurringEditing ? "Update" : "Save"}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            </div>
+
+            {recurringBills.length === 0 ? (
+              <div className="p-8 text-center text-muted-foreground text-sm">
+                No recurring bills configured yet. Add water, internet, garbage, or bua bills here so they generate automatically every month.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-xs uppercase text-muted-foreground bg-muted/50">
+                    <tr>
+                      <th className="text-left p-3 font-medium">Bill</th>
+                      <th className="text-left p-3 font-medium">Category</th>
+                      <th className="text-right p-3 font-medium">Amount / month</th>
+                      <th className="text-left p-3 font-medium">Allocation</th>
+                      <th className="text-center p-3 font-medium">Status</th>
+                      <th className="w-[110px]"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recurringBills.map((bill) => (
+                      <tr key={bill.id} className="border-t hover:bg-muted/30 transition-colors">
+                        <td className="p-3 font-medium">{bill.label}</td>
+                        <td className="p-3">
+                          <Badge variant="outline" className="text-xs">{EXPENSE_CATEGORY_LABELS[bill.category] || bill.category}</Badge>
+                        </td>
+                        <td className="p-3 text-right tabular-nums font-semibold">{bdt(bill.amount)}</td>
+                        <td className="p-3 text-xs text-muted-foreground capitalize">{bill.allocationMethod.replace(/_/g, " ")}</td>
+                        <td className="p-3 text-center">
+                          {bill.active ? (
+                            <Badge className="bg-primary/10 text-primary border-primary/20 text-xs">Active</Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-muted-foreground text-xs">Paused</Badge>
+                          )}
+                        </td>
+                        <td className="p-3">
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 w-7 p-0"
+                              title={bill.active ? "Pause" : "Resume"}
+                              onClick={() => toggleRecurringActive(bill)}
+                            >
+                              {bill.active ? <PowerOff className="h-3.5 w-3.5" /> : <Power className="h-3.5 w-3.5" />}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 w-7 p-0"
+                              onClick={() => {
+                                setRecurringEditing(bill);
+                                setRecurringForm({
+                                  category: bill.category,
+                                  label: bill.label,
+                                  amount: String(bill.amount),
+                                  allocationMethod: bill.allocationMethod,
+                                });
+                                setRecurringOpen(true);
+                              }}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                              onClick={() => handleDeleteRecurring(bill)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        )}
 
         {/* ──────────────────────────────────────────── */}
         {/* SEARCH + FILTER BAR */}
