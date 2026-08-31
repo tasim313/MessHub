@@ -37,6 +37,7 @@ import { EXPENSE_CATEGORY_LABELS } from "./types";
 import { calculateMemberExpenseShares, calculateMemberStaffShare } from "./calculations/engine-v2";
 import { createAdvance } from "./advance-service";
 import { checkLedgerChargeExists, checkInternalPaymentExists, checkPaymentReferenceExists } from "./duplicate-check";
+import { withoutUndefined } from "./data";
 
 // ============================================================================
 // 1. GENERATE CHARGES FROM A SHARED EXPENSE
@@ -88,18 +89,18 @@ export async function generateChargesFromExpense(
     }
 
     // Save allocation to expense_allocations collection
-    await addDoc(collection(db, "expense_allocations"), {
+    await addDoc(collection(db, "expense_allocations"), withoutUndefined({
       ...allocation,
       createdAt: Date.now(),
       createdBy: uid,
-    });
+    }));
     allocationsCreated++;
 
     // Generate ledger charge for this member's share
     if (allocation.amount > 0) {
       const categoryLabel = EXPENSE_CATEGORY_LABELS[expense.category] || expense.category;
 
-      await addDoc(collection(db, "ledgers"), {
+      await addDoc(collection(db, "ledgers"), withoutUndefined({
         memberId: allocation.memberId,
         memberName: allocation.memberName,
         date: expense.date,
@@ -112,7 +113,7 @@ export async function generateChargesFromExpense(
         referenceType: "expense",
         createdAt: Date.now(),
         createdBy: uid,
-      });
+      }));
       chargesCreated++;
     }
   }
@@ -131,7 +132,7 @@ export async function generateChargesFromExpense(
       const paymentExists = await checkInternalPaymentExists(expense.id, expense.paidBy);
       if (!paymentExists) {
         // Record internal payment - payer's own share is auto-paid
-        await addDoc(collection(db, "payments"), {
+        await addDoc(collection(db, "payments"), withoutUndefined({
           memberId: expense.paidBy,
           memberName: payer.name,
           amount: payerShare,
@@ -145,10 +146,10 @@ export async function generateChargesFromExpense(
           referenceType: "expense",
           createdAt: Date.now(),
           createdBy: uid,
-        });
+        }));
 
         // Record in ledger as payment
-        await addDoc(collection(db, "ledgers"), {
+        await addDoc(collection(db, "ledgers"), withoutUndefined({
           memberId: expense.paidBy,
           memberName: payer.name,
           date: expense.date,
@@ -161,7 +162,7 @@ export async function generateChargesFromExpense(
           referenceType: "expense",
           createdAt: Date.now(),
           createdBy: uid,
-        });
+        }));
       }
 
       // 4. Create advance for the excess (expense amount - payer's share)
@@ -334,7 +335,7 @@ export async function generateRentCharges(
     }
 
     // Create rent charge
-    await addDoc(collection(db, "rent_charges"), {
+    await addDoc(collection(db, "rent_charges"), withoutUndefined({
       memberId: member.id,
       memberName: member.name,
       month: ym,
@@ -344,7 +345,7 @@ export async function generateRentCharges(
       dueAmount: rentAmount,
       createdAt: Date.now(),
       createdBy: uid,
-    });
+    }));
 
     // Generate ledger charge with date check
     const chargeDate = `${ym}-01`;
@@ -355,7 +356,7 @@ export async function generateRentCharges(
       chargeDate,
     );
     if (!ledgerExists) {
-      await addDoc(collection(db, "ledgers"), {
+      await addDoc(collection(db, "ledgers"), withoutUndefined({
         memberId: member.id,
         memberName: member.name,
         date: chargeDate,
@@ -366,7 +367,7 @@ export async function generateRentCharges(
         notes: `Rent for ${ym} - ${room.roomNo} (${room.monthlyRent}/${room.totalBeds} beds)`,
         createdAt: Date.now(),
         createdBy: uid,
-      });
+      }));
     }
 
     created++;
@@ -407,7 +408,7 @@ export async function generateStaffCharges(
     if (exists) continue;
 
     // Generate ledger charge
-    await addDoc(collection(db, "ledgers"), {
+    await addDoc(collection(db, "ledgers"), withoutUndefined({
       memberId: member.id,
       memberName: member.name,
       date: chargeDate,
@@ -418,7 +419,7 @@ export async function generateStaffCharges(
       notes: `Staff salary share for ${ym}`,
       createdAt: Date.now(),
       createdBy: uid,
-    });
+    }));
 
     created++;
   }

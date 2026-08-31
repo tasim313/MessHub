@@ -27,6 +27,7 @@ import { db } from "./firebase";
 import type { CreditNote, Refund } from "./types";
 import { fetchOutstandingCharges, allocateToCharges, getAllocationsForSource } from "./allocation-service";
 import { logActivity, type ActorInfo } from "./workflow";
+import { withoutUndefined } from "./data";
 
 export interface CreditNoteResult {
   creditNoteId: string;
@@ -68,7 +69,7 @@ export async function issueCreditNote(
     createdBy: actor.uid,
     createdAt: Date.now(),
   };
-  const ref = await addDoc(collection(db, "credit_notes"), creditNoteData);
+  const ref = await addDoc(collection(db, "credit_notes"), withoutUndefined(creditNoteData as unknown as Record<string, unknown>));
   const creditNoteId = ref.id;
 
   let charges = await fetchOutstandingCharges(memberId);
@@ -80,7 +81,7 @@ export async function issueCreditNote(
   }
   const result = await allocateToCharges("credit_note", creditNoteId, memberId, amount, date, ym, charges, actor.uid);
 
-  await addDoc(collection(db, "ledgers"), {
+  await addDoc(collection(db, "ledgers"), withoutUndefined({
     memberId,
     memberName,
     date,
@@ -93,7 +94,7 @@ export async function issueCreditNote(
     referenceType: "credit_note",
     createdAt: Date.now(),
     createdBy: actor.uid,
-  });
+  }));
 
   await logActivity({
     type: "financial",
@@ -137,7 +138,7 @@ export async function voidCreditNote(
 
   // Restore the corrected amount as a new charge (never edits the original
   // charges the credit note had reduced).
-  await addDoc(collection(db, "ledgers"), {
+  await addDoc(collection(db, "ledgers"), withoutUndefined({
     memberId: creditNote.memberId,
     memberName: creditNote.memberName,
     date,
@@ -152,7 +153,7 @@ export async function voidCreditNote(
     paidAmount: 0,
     createdAt: Date.now(),
     createdBy: actor.uid,
-  });
+  }));
 
   await logActivity({
     type: "financial",
@@ -202,13 +203,13 @@ export async function issueRefund(
     createdBy: actor.uid,
     createdAt: Date.now(),
   };
-  const ref = await addDoc(collection(db, "refunds"), refundData);
+  const ref = await addDoc(collection(db, "refunds"), withoutUndefined(refundData as unknown as Record<string, unknown>));
   const refundId = ref.id;
 
   // "refund" already reduces the member's held deposit/increases what they
   // owe going forward (see calculateMemberLedger: balance += amount, the
   // same direction as a charge).
-  await addDoc(collection(db, "ledgers"), {
+  await addDoc(collection(db, "ledgers"), withoutUndefined({
     memberId,
     memberName,
     date,
@@ -221,7 +222,7 @@ export async function issueRefund(
     referenceType: "refund",
     createdAt: Date.now(),
     createdBy: actor.uid,
-  });
+  }));
 
   await logActivity({
     type: "financial",
@@ -259,7 +260,7 @@ export async function voidRefund(
     voidedAt: Date.now(),
   });
 
-  await addDoc(collection(db, "ledgers"), {
+  await addDoc(collection(db, "ledgers"), withoutUndefined({
     memberId: refund.memberId,
     memberName: refund.memberName,
     date,
@@ -272,7 +273,7 @@ export async function voidRefund(
     referenceType: "refund",
     createdAt: Date.now(),
     createdBy: actor.uid,
-  });
+  }));
 
   await logActivity({
     type: "financial",

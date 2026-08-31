@@ -12,6 +12,7 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import type { Notification, Role } from "./types";
+import { withoutUndefined } from "./data";
 
 /**
  * Create a notification for a specific user
@@ -24,12 +25,12 @@ export async function createNotification(input: {
   type?: "info" | "warning" | "error" | "success";
   link?: string;
 }): Promise<string> {
-  const notificationRef = await addDoc(collection(db, "notifications"), {
+  const notificationRef = await addDoc(collection(db, "notifications"), withoutUndefined({
     ...input,
     type: input.type || "info",
     read: false,
     createdAt: serverTimestamp(),
-  });
+  }));
   
   return notificationRef.id;
 }
@@ -55,15 +56,16 @@ export async function createNotificationForRole(input: {
   // Create notifications for each user
   const batch = [];
   for (const userDoc of usersSnap.docs) {
-    batch.push(addDoc(collection(db, "notifications"), {
+    batch.push(addDoc(collection(db, "notifications"), withoutUndefined({
       recipientUid: userDoc.id,
       recipientRole: input.recipientRole,
       title: input.title,
       message: input.message,
       type: input.type || "info",
+      link: input.link,
       read: false,
       createdAt: serverTimestamp(),
-    }));
+    })));
   }
   
   await Promise.all(batch);
@@ -85,15 +87,16 @@ export async function createNotificationForAll(input: {
   const batch = [];
   for (const userDoc of usersSnap.docs) {
     const userData = userDoc.data() as { role: Role };
-    batch.push(addDoc(collection(db, "notifications"), {
+    batch.push(addDoc(collection(db, "notifications"), withoutUndefined({
       recipientUid: userDoc.id,
       recipientRole: userData.role,
       title: input.title,
       message: input.message,
       type: input.type || "info",
+      link: input.link,
       read: false,
       createdAt: serverTimestamp(),
-    }));
+    })));
   }
   
   await Promise.all(batch);
