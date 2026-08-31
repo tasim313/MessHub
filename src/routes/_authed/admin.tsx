@@ -23,7 +23,7 @@ import {
   type ChangeRequest,
   type Member,
 } from "@/lib/data";
-import { doc, writeBatch } from "firebase/firestore";
+import { doc, writeBatch, setDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { applyApprovedRequest, rejectRequest, logActivity } from "@/lib/workflow";
 import { toast } from "sonner";
@@ -37,6 +37,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { AppUser, Role, UserStatus } from "@/lib/firebase";
+import type { MessSettings } from "@/lib/types";
+import { CalendarClock } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -79,6 +81,7 @@ function AdminPage() {
   const { data: members } = useCollection<Member>("members", [
     orderBy("joinedAt", "desc"),
   ]);
+  const { data: settings } = useCollection<MessSettings>("settings");
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -87,6 +90,30 @@ function AdminPage() {
   const [creating, setCreating] = useState(false);
   const [actingUid, setActingUid] = useState<string | null>(null);
   const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null);
+  const [savingRentPolicy, setSavingRentPolicy] = useState(false);
+
+  const rentProrationPolicy = settings.find((s) => s.id === "general")?.rentProrationPolicy || "full_month";
+
+  const handleRentPolicyChange = async (policy: "full_month" | "by_days") => {
+    if (!profile) return;
+    setSavingRentPolicy(true);
+    try {
+      await setDoc(
+        doc(db, "settings", "general"),
+        { rentProrationPolicy: policy, updatedAt: Date.now(), updatedBy: profile.uid },
+        { merge: true },
+      );
+      toast.success(
+        policy === "by_days"
+          ? "Rent will now be prorated by actual days stayed for join/leave months"
+          : "Rent will now always charge the full month, even for a partial join/leave month",
+      );
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSavingRentPolicy(false);
+    }
+  };
 
   const memberMap = useMemo(
     () => new Map(members.map((member) => [member.uid || member.id, member])),
@@ -255,6 +282,53 @@ function AdminPage() {
             </div>
           </Card>
         </div>
+
+        <Card className="p-5">
+          <div className="flex items-center gap-2">
+            <CalendarClock className="h-5 w-5 text-primary" />
+            <h3 className="font-semibold">Rent Policy</h3>
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            How rent is charged for a member's join month, and their final month if they've since left.
+            Every month in between is always charged in full either way.
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              disabled={savingRentPolicy}
+              onClick={() => handleRentPolicyChange("full_month")}
+              className={
+                "rounded-lg border p-3 text-left transition-colors disabled:opacity-60 " +
+                (rentProrationPolicy === "full_month" ? "border-primary bg-primary/5" : "hover:bg-muted/50")
+              }
+            >
+              <div className="font-medium text-sm flex items-center gap-2">
+                Full Month
+                {rentProrationPolicy === "full_month" && <Badge className="text-xs">Active</Badge>}
+              </div>
+              <div className="text-xs text-muted-foreground mt-1">
+                A member is always charged the full month's rent, no matter how many days they actually stayed.
+              </div>
+            </button>
+            <button
+              type="button"
+              disabled={savingRentPolicy}
+              onClick={() => handleRentPolicyChange("by_days")}
+              className={
+                "rounded-lg border p-3 text-left transition-colors disabled:opacity-60 " +
+                (rentProrationPolicy === "by_days" ? "border-primary bg-primary/5" : "hover:bg-muted/50")
+              }
+            >
+              <div className="font-medium text-sm flex items-center gap-2">
+                Prorate by Days
+                {rentProrationPolicy === "by_days" && <Badge className="text-xs">Active</Badge>}
+              </div>
+              <div className="text-xs text-muted-foreground mt-1">
+                A member's join/leave month is billed only for the days they actually stayed, based on Joining/Leaving date on their profile.
+              </div>
+            </button>
+          </div>
+        </Card>
 
         <div className="grid gap-6 xl:grid-cols-[420px,minmax(0,1fr)]">
           <Card className="p-5">

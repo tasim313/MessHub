@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -23,7 +24,7 @@ import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
 import type { Expense, ExpenseCategory, ExpenseStatus, AllocationMethod, ExpenseAllocation, RecurringBill } from "@/lib/types";
 import { EXPENSE_CATEGORY_LABELS, EXPENSE_CATEGORY_TO_SERVICE } from "@/lib/types";
-import { createExpenseWithAccounting } from "@/lib/workflow-integration";
+import { createExpenseWithAccounting, deleteExpenseWithAccounting } from "@/lib/workflow-integration";
 
 export const Route = createFileRoute("/_authed/utilities")({
   component: ExpensesPage,
@@ -153,7 +154,14 @@ function ExpensesPage() {
     description: "",
     notes: "",
     status: "pending" as ExpenseStatus,
+    personal: false,
   });
+
+  // Per-member amount/percentage entry — only shown and used when
+  // allocationMethod is "per_member" (exact Tk amounts) or
+  // "custom_percentage" (must sum to 100%). Keyed by memberId, values kept
+  // as raw strings while typing and parsed on submit.
+  const [customSplits, setCustomSplits] = useState<Record<string, string>>({});
 
   const activeMembers = useMemo(
     () => members.filter((m) => m.active).sort((a, b) => a.name.localeCompare(b.name)),
@@ -172,8 +180,15 @@ function ExpensesPage() {
       description: "",
       notes: "",
       status: "pending",
+      personal: false,
     });
+    setCustomSplits({});
   };
+
+  const customSplitTotal = useMemo(
+    () => Object.values(customSplits).reduce((sum, v) => sum + (parseFloat(v) || 0), 0),
+    [customSplits],
+  );
 
   const updatePaidBy = (memberId: string) => {
     if (memberId === "__none__") {
@@ -208,6 +223,10 @@ function ExpensesPage() {
       result = result.filter((e) => e.paidBy);
     } else if (filterStatus === "pending") {
       result = result.filter((e) => !e.paidBy);
+    } else if (filterStatus === "personal") {
+      result = result.filter((e) => e.personal);
+    } else if (filterStatus === "shared") {
+      result = result.filter((e) => !e.personal);
     }
 
     // 4. Search filter
@@ -231,17 +250,21 @@ function ExpensesPage() {
     return result;
   }, [expenses, filterMode, filterMonth, filterDateFrom, filterDateTo, filterCategory, filterStatus, searchQuery]);
 
-  // Summary stats for filtered data
+  // Summary stats for filtered data — personal expenses are excluded from
+  // every total here since they're not shared mess spending (they still
+  // appear in the table below, just badged "Personal" and left out of the sums).
   const filteredStats = useMemo(() => {
-    const total = filteredExpenses.reduce((s, e) => s + (e.amount || 0), 0);
-    const paid = filteredExpenses.filter((e) => e.paidBy).reduce((s, e) => s + (e.amount || 0), 0);
+    const shared = filteredExpenses.filter((e) => !e.personal);
+    const total = shared.reduce((s, e) => s + (e.amount || 0), 0);
+    const paid = shared.filter((e) => e.paidBy).reduce((s, e) => s + (e.amount || 0), 0);
     const pending = total - paid;
-    return { total, paid, pending, count: filteredExpenses.length };
+    return { total, paid, pending, count: shared.length };
   }, [filteredExpenses]);
 
   // All-time stats
-  const totalExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
-  const paidExpenses = expenses.filter((e) => e.paidBy).reduce((s, e) => s + (e.amount || 0), 0);
+  const sharedExpenses = useMemo(() => expenses.filter((e) => !e.personal), [expenses]);
+  const totalExpenses = sharedExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+  const paidExpenses = sharedExpenses.filter((e) => e.paidBy).reduce((s, e) => s + (e.amount || 0), 0);
 
   const resetFilters = () => {
     setFilterMode("month");
@@ -264,7 +287,17 @@ function ExpensesPage() {
     if (!profile || !confirm(`Delete ${EXPENSE_CATEGORY_LABELS[e.category]} (${bdt(e.amount)})?`)) return;
     try {
       if (profile.role === "owner") {
-        await deleteDocFrom("expenses", e.id);
+        if (e.personal) {
+          // A personal expense never fanned out into allocations/charges —
+          // nothing else to clean up.
+          await deleteDocFrom("expenses", e.id);
+        } else {
+          const result = await deleteExpenseWithAccounting(e.id);
+          if (!result.deleted) {
+            toast.error(result.reason || "Could not delete this expense");
+            return;
+          }
+        }
         toast.success("Deleted");
       } else {
         await submitChangeRequest({
@@ -287,6 +320,31 @@ function ExpensesPage() {
     e.preventDefault();
     const amount = parseFloat(form.amount);
     if (!amount || amount <= 0) return toast.error("Enter amount");
+    if (form.personal && (form.paidBy === "__none__" || !form.paidBy)) {
+      return toast.error("A personal expense must belong to a member — select who it's for");
+    }
+
+    // Custom splits must fully account for the expense — a short percentage
+    // or amount total would silently leave part of the bill uncharged to
+    // anyone, and an over-100%/over-amount total would double-charge.
+    // Doesn't apply to a personal expense — it's never split at all.
+    let customPercentages: Record<string, number> | undefined;
+    let customAmounts: Record<string, number> | undefined;
+    if (!form.personal && form.allocationMethod === "custom_percentage") {
+      if (Math.abs(customSplitTotal - 100) > 0.5) {
+        return toast.error(`Percentages must add up to 100% (currently ${customSplitTotal.toFixed(1)}%)`);
+      }
+      customPercentages = Object.fromEntries(
+        Object.entries(customSplits).map(([id, v]) => [id, parseFloat(v) || 0]).filter(([, v]) => (v as number) > 0),
+      );
+    } else if (!form.personal && form.allocationMethod === "per_member") {
+      if (Math.abs(customSplitTotal - amount) > 0.5) {
+        return toast.error(`Member amounts must add up to the total ৳${amount} (currently ৳${customSplitTotal.toFixed(2)})`);
+      }
+      customAmounts = Object.fromEntries(
+        Object.entries(customSplits).map(([id, v]) => [id, parseFloat(v) || 0]).filter(([, v]) => (v as number) > 0),
+      );
+    }
 
     setSaving(true);
     try {
@@ -301,6 +359,9 @@ function ExpensesPage() {
         paidBy,
         paidByName,
         allocationMethod: form.allocationMethod,
+        customPercentages,
+        customAmounts,
+        personal: form.personal || undefined,
         description: form.description,
         notes: form.notes || undefined,
         status: paidBy ? ("paid" as ExpenseStatus) : ("pending" as ExpenseStatus),
@@ -410,6 +471,24 @@ function ExpensesPage() {
                   </div>
                 </div>
 
+                <div className="flex items-start gap-2 rounded-lg border p-3">
+                  <Checkbox
+                    id="personal-expense"
+                    checked={form.personal}
+                    disabled={!!editing && !editing.personal}
+                    onCheckedChange={(checked) => setForm({ ...form, personal: checked === true })}
+                    className="mt-0.5"
+                  />
+                  <label htmlFor="personal-expense" className={!!editing && !editing.personal ? "" : "cursor-pointer"}>
+                    <div className="text-sm font-medium">Personal Expense</div>
+                    <div className="text-xs text-muted-foreground">
+                      {editing && !editing.personal
+                        ? "Already saved as a shared expense with allocations/charges — editing can't retroactively remove those, so this can't be switched to personal here."
+                        : "Belongs only to one member (toothpaste, snacks, ...) — recorded for their own reference, never split or charged to anyone else, never affects settlement."}
+                    </div>
+                  </label>
+                </div>
+
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-2">
                     <Label>Date</Label>
@@ -419,34 +498,74 @@ function ExpensesPage() {
                       onChange={(e) => setForm({ ...form, date: e.target.value })}
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label>Allocation Method</Label>
-                    <Select
-                      value={form.allocationMethod}
-                      onValueChange={(v) => setForm({ ...form, allocationMethod: v as AllocationMethod })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="equal">Equal Split</SelectItem>
-                        <SelectItem value="per_member">Per Member Custom</SelectItem>
-                        <SelectItem value="per_room">Room-Based</SelectItem>
-                        <SelectItem value="usage_based">Usage-Based</SelectItem>
-                        <SelectItem value="fixed">Fixed Amount</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {!form.personal && (
+                    <div className="space-y-2">
+                      <Label>Allocation Method</Label>
+                      <Select
+                        value={form.allocationMethod}
+                        onValueChange={(v) => setForm({ ...form, allocationMethod: v as AllocationMethod })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="equal">Equal Split</SelectItem>
+                          <SelectItem value="per_member">Per Member Custom (exact ৳)</SelectItem>
+                          <SelectItem value="custom_percentage">Percentage-Based (custom %)</SelectItem>
+                          <SelectItem value="per_room">Room-Based</SelectItem>
+                          <SelectItem value="usage_based">Usage-Based</SelectItem>
+                          <SelectItem value="fixed">Fixed Amount</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
 
+                {!form.personal && (form.allocationMethod === "per_member" || form.allocationMethod === "custom_percentage") && (
+                  <div className="space-y-2 rounded-lg border p-3">
+                    <div className="flex items-center justify-between">
+                      <Label>
+                        {form.allocationMethod === "custom_percentage" ? "Each Member's Percentage" : "Each Member's Amount (৳)"}
+                      </Label>
+                      <span className={
+                        "text-xs font-medium " +
+                        (form.allocationMethod === "custom_percentage"
+                          ? Math.abs(customSplitTotal - 100) > 0.5 ? "text-destructive" : "text-primary"
+                          : Math.abs(customSplitTotal - (parseFloat(form.amount) || 0)) > 0.5 ? "text-destructive" : "text-primary")
+                      }>
+                        {form.allocationMethod === "custom_percentage"
+                          ? `Total: ${customSplitTotal.toFixed(1)}% / 100%`
+                          : `Total: ৳${customSplitTotal.toFixed(2)} / ৳${(parseFloat(form.amount) || 0).toFixed(2)}`}
+                      </span>
+                    </div>
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      {activeMembers.map((m) => (
+                        <div key={m.id} className="flex items-center gap-2">
+                          <span className="text-sm flex-1 truncate">{m.name}</span>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className="w-28 h-8"
+                            placeholder="0"
+                            value={customSplits[m.id] || ""}
+                            onChange={(e) => setCustomSplits({ ...customSplits, [m.id]: e.target.value })}
+                          />
+                          {form.allocationMethod === "custom_percentage" && <span className="text-xs text-muted-foreground w-4">%</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-2">
-                  <Label>Paid By (optional - who paid on behalf of the mess)</Label>
+                  <Label>{form.personal ? "Belongs To (required)" : "Paid By (optional - who paid on behalf of the mess)"}</Label>
                   <Select value={form.paidBy} onValueChange={updatePaidBy}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select payer (optional)" />
+                      <SelectValue placeholder={form.personal ? "Select member" : "Select payer (optional)"} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__none__">-- Not paid yet --</SelectItem>
+                      {!form.personal && <SelectItem value="__none__">-- Not paid yet --</SelectItem>}
                       {activeMembers.map((m) => (
                         <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
                       ))}
@@ -817,6 +936,8 @@ function ExpensesPage() {
                     <SelectItem value="all">All Status</SelectItem>
                     <SelectItem value="paid">Paid</SelectItem>
                     <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="shared">Shared Only</SelectItem>
+                    <SelectItem value="personal">Personal Only</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -889,9 +1010,14 @@ function ExpensesPage() {
                     <tr key={exp.id} className="border-t hover:bg-muted/30 transition-colors">
                       <td className="p-3 tabular-nums whitespace-nowrap">{exp.date}</td>
                       <td className="p-3">
-                        <Badge variant="outline" className="text-xs font-medium">
-                          {EXPENSE_CATEGORY_LABELS[exp.category] || exp.category}
-                        </Badge>
+                        <div className="flex items-center gap-1.5">
+                          <Badge variant="outline" className="text-xs font-medium">
+                            {EXPENSE_CATEGORY_LABELS[exp.category] || exp.category}
+                          </Badge>
+                          {exp.personal && (
+                            <Badge variant="secondary" className="text-xs">Personal</Badge>
+                          )}
+                        </div>
                       </td>
                       <td className="p-3">
                         {exp.paidByName ? (
@@ -942,7 +1068,14 @@ function ExpensesPage() {
                                   description: exp.description || "",
                                   notes: exp.notes || "",
                                   status: exp.status,
+                                  personal: exp.personal || false,
                                 });
+                                setCustomSplits(
+                                  Object.fromEntries(
+                                    Object.entries(exp.customPercentages || exp.customAmounts || {})
+                                      .map(([id, v]) => [id, String(v)]),
+                                  ),
+                                );
                                 setOpen(true);
                               }}
                             >

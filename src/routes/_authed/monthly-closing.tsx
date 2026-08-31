@@ -39,7 +39,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { MonthlyClosing, RentCharge, Deposit, Credit, Payment, LedgerEntry } from "@/lib/types";
+import type { MonthlyClosing, RentCharge, Deposit, Credit, Payment, LedgerEntry, MessSettings } from "@/lib/types";
 
 export const Route = createFileRoute("/_authed/monthly-closing")({
   component: MonthlyClosingPage,
@@ -67,6 +67,7 @@ function MonthlyClosingPage() {
   const { data: advanceRecoveries } = useCollection<AdvanceRecovery>("advance_recoveries");
   const { data: creditNotes } = useCollection<CreditNote>("credit_notes");
   const { data: refunds } = useCollection<Refund>("refunds");
+  const { data: settings } = useCollection<MessSettings>("settings");
 
   const monthBazar = useMemo(() => bazar.filter((b) => b.ym === ym), [bazar, ym]);
   const monthExpenses = useMemo(() => expenses.filter((e) => e.ym === ym), [expenses, ym]);
@@ -154,7 +155,8 @@ function MonthlyClosingPage() {
       // Backfills every missing month (not just the one currently selected)
       // for every active member — the same logic that runs automatically on
       // every session, exposed here for an immediate manual re-check.
-      const result = await ensureRentChargesUpToDate(members, rooms, rentCharges, allLedgers, profile.uid);
+      const rentProrationPolicy = settings.find((s) => s.id === "general")?.rentProrationPolicy || "full_month";
+      const result = await ensureRentChargesUpToDate(members, rooms, rentCharges, allLedgers, profile.uid, rentProrationPolicy);
       toast.success(result.created > 0 ? `Generated rent for ${result.months.join(", ")}` : "Rent is already up to date");
     } catch (err) {
       toast.error((err as Error).message);

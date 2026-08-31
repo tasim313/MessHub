@@ -77,6 +77,9 @@ export async function createExpenseWithAccounting(
     paidBy: paidBy || undefined,
     paidByName: paidByName || undefined,
     allocationMethod: expenseData.allocationMethod || "equal",
+    customPercentages: expenseData.customPercentages,
+    customAmounts: expenseData.customAmounts,
+    personal: expenseData.personal || undefined,
     status: paidBy ? "paid" : "pending",
     description: expenseData.description,
     notes: expenseData.notes,
@@ -87,6 +90,20 @@ export async function createExpenseWithAccounting(
 
   batch.set(expenseRef, withoutUndefined(newExpense as unknown as Record<string, unknown>));
 
+  // A personal expense (toothpaste, snacks, ...) belongs only to whoever
+  // paid for it — it's recorded for their own reference, but must never be
+  // allocated, charged to anyone else, or touch payments/advances/the
+  // settlement engine. Nothing beyond the expense document itself is written.
+  if (newExpense.personal) {
+    await batch.commit();
+    return {
+      expenseId,
+      allocationsCount: 0,
+      internalPaymentRecorded: false,
+      advanceCreated: false,
+    };
+  }
+
   // 2. Calculate and create expense allocations
   const serviceType = getServiceTypeForExpenseCategory(newExpense.category);
   const subscribers = serviceType
@@ -94,14 +111,27 @@ export async function createExpenseWithAccounting(
     : activeMembers;
   const totalSubscribers = subscribers.length || 1;
 
+  // "custom_percentage" and "per_member" are an admin explicitly assigning
+  // who owes what (e.g. the 40/20/20/20 detergent split, or unequal rent-
+  // style shares) — the assigned figure IS the member's responsibility,
+  // bypassing the equal-split-among-subscribers logic entirely.
+  const getMemberAmount = (member: Member): { amount: number; included: boolean } => {
+    if (newExpense.allocationMethod === "custom_percentage" && newExpense.customPercentages) {
+      const pct = newExpense.customPercentages[member.id] || 0;
+      return { amount: Math.round(((amount * pct) / 100) * 100) / 100, included: pct > 0 };
+    }
+    if (newExpense.allocationMethod === "per_member" && newExpense.customAmounts) {
+      const amt = newExpense.customAmounts[member.id] || 0;
+      return { amount: Math.round(amt * 100) / 100, included: amt > 0 };
+    }
+    const isSubscribed = serviceType ? isMemberSubscribedToService(member, serviceType) : true;
+    return { amount: isSubscribed ? amount / totalSubscribers : 0, included: isSubscribed };
+  };
+
   let payerShare = 0;
 
   activeMembers.forEach((member) => {
-    const isSubscribed = serviceType
-      ? isMemberSubscribedToService(member, serviceType)
-      : true;
-
-    const memberAmount = isSubscribed ? amount / totalSubscribers : 0;
+    const { amount: memberAmount, included: isSubscribed } = getMemberAmount(member);
 
     const allocation: ExpenseAllocation = {
       id: `${expenseId}_${member.id}`,
@@ -311,6 +341,86 @@ export async function createBazarWithAccounting(
   await batch.commit();
 
   return { bazarId };
+}
+
+// ============================================================================
+// 3. DELETE WITH ACCOUNTING (undo everything a create*WithAccounting fanned out)
+// ============================================================================
+
+/**
+ * Delete a bazar entry AND the payment/ledger records it fanned out to.
+ * Plain deleteDoc("bazar", id) only ever removed the bazar document itself —
+ * the mirrored payments/bazar_contribution and ledgers/bazar_contribution
+ * records it created stayed behind forever, permanently overstating that
+ * member's contributions by the deleted purchase's amount. Confirmed live:
+ * two previously-deleted bazar entries had left exactly this kind of orphan.
+ */
+export async function deleteBazarWithAccounting(bazarId: string): Promise<void> {
+  const batch = writeBatch(db);
+  batch.delete(doc(db, "bazar", bazarId));
+
+  const [paymentsSnap, ledgersSnap] = await Promise.all([
+    getDocs(query(collection(db, "payments"), where("referenceType", "==", "bazar"), where("referenceId", "==", bazarId))),
+    getDocs(query(collection(db, "ledgers"), where("referenceType", "==", "bazar"), where("referenceId", "==", bazarId))),
+  ]);
+  paymentsSnap.docs.forEach((d) => batch.delete(d.ref));
+  ledgersSnap.docs.forEach((d) => batch.delete(d.ref));
+
+  await batch.commit();
+}
+
+export interface DeleteExpenseResult {
+  deleted: boolean;
+  reason?: string;
+}
+
+/**
+ * Delete a shared expense AND everything createExpenseWithAccounting fanned
+ * it out into (allocations, ledger charges, the payer's internal payment,
+ * and any advance) — plain deleteDoc("expenses", id) left all of those
+ * behind, the same orphan-record bug as bazar deletion.
+ *
+ * Refuses to delete (rather than silently corrupting the ledger) if any of
+ * this expense's charges have already been paid down by someone, or its
+ * advance has already been partially recovered — undoing those cleanly
+ * would mean reversing someone else's already-recorded payment, which this
+ * function has no way to do safely. A credit note is the right tool for
+ * correcting an expense once money has already moved against it.
+ */
+export async function deleteExpenseWithAccounting(expenseId: string): Promise<DeleteExpenseResult> {
+  const [ledgersSnap, paymentsSnap, allocationsSnap, advancesSnap] = await Promise.all([
+    getDocs(query(collection(db, "ledgers"), where("referenceType", "==", "expense"), where("referenceId", "==", expenseId))),
+    getDocs(query(collection(db, "payments"), where("referenceType", "==", "expense"), where("referenceId", "==", expenseId))),
+    getDocs(query(collection(db, "expense_allocations"), where("expenseId", "==", expenseId))),
+    getDocs(query(collection(db, "advances"), where("sourceId", "==", expenseId))),
+  ]);
+
+  const ledgerDocs = ledgersSnap.docs.map((d) => ({ ref: d.ref, data: d.data() as Record<string, unknown> }));
+  const alreadyPaid = ledgerDocs.some(
+    (l) => l.data.transactionType === "utility_charge" && ((l.data.paidAmount as number) || 0) > 0,
+  );
+  if (alreadyPaid) {
+    return { deleted: false, reason: "Someone has already paid part of a charge from this expense — delete blocked. Issue a credit note instead to correct it." };
+  }
+
+  const advanceDocs = advancesSnap.docs;
+  const advanceRecovered = advanceDocs.some((d) => {
+    const data = d.data();
+    return Math.abs((data.remainingAmount || 0) - (data.amount || 0)) > 0.01;
+  });
+  if (advanceRecovered) {
+    return { deleted: false, reason: "This expense's advance has already been partially recovered by another member's payment — delete blocked. Issue a credit note instead to correct it." };
+  }
+
+  const batch = writeBatch(db);
+  batch.delete(doc(db, "expenses", expenseId));
+  ledgerDocs.forEach((l) => batch.delete(l.ref));
+  paymentsSnap.docs.forEach((d) => batch.delete(d.ref));
+  allocationsSnap.docs.forEach((d) => batch.delete(d.ref));
+  advanceDocs.forEach((d) => batch.delete(d.ref));
+
+  await batch.commit();
+  return { deleted: true };
 }
 
 // ============================================================================

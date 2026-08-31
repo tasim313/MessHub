@@ -269,6 +269,12 @@ export function calculateMemberExpenseShares(
   expenseIds.forEach((expenseId) => {
     const allocationsForExpense = monthAllocations.filter((a) => a.expenseId === expenseId);
 
+    // A personal expense is never shared — createExpenseWithAccounting never
+    // allocates one, so this only matters as a defensive guard against
+    // legacy/edge-case data reaching this function.
+    const expenseForId = monthExpenses.find((e) => e.id === expenseId);
+    if (expenseForId?.personal) return;
+
     if (allocationsForExpense.length > 0) {
       const memberAlloc = allocationsForExpense.find((a) => a.memberId === member.id);
       const memberShare = memberAlloc?.amount || 0;
@@ -284,8 +290,30 @@ export function calculateMemberExpenseShares(
     const expense = monthExpenses.find((e) => e.id === expenseId);
     if (!expense) return;
 
-    const serviceType = EXPENSE_SERVICE_MAP[expense.category] || null;
     let memberShare = 0;
+
+    // Mirror the same custom_percentage/per_member handling
+    // createExpenseWithAccounting applies at creation time, so a pre-existing
+    // expense with no persisted allocations yet still respects an explicit
+    // admin-assigned split instead of silently falling back to an equal share.
+    if (expense.allocationMethod === "custom_percentage" && expense.customPercentages) {
+      memberShare = (expense.customPercentages[member.id] || 0) * (expense.amount || 0) / 100;
+      if (memberShare > 0) {
+        expenseShareBreakdown[expense.category] = roundToTwoDecimals((expenseShareBreakdown[expense.category] || 0) + memberShare);
+        expenseShares += memberShare;
+      }
+      return;
+    }
+    if (expense.allocationMethod === "per_member" && expense.customAmounts) {
+      memberShare = expense.customAmounts[member.id] || 0;
+      if (memberShare > 0) {
+        expenseShareBreakdown[expense.category] = roundToTwoDecimals((expenseShareBreakdown[expense.category] || 0) + memberShare);
+        expenseShares += memberShare;
+      }
+      return;
+    }
+
+    const serviceType = EXPENSE_SERVICE_MAP[expense.category] || null;
 
     if (serviceType && isMemberExplicitlyOptedOut(member, serviceType)) {
       // Always respect an explicit opt-out on this member.
@@ -467,7 +495,9 @@ export function calculateMemberMonthlySummary(
 ): MemberMonthlySummary {
   const monthMeals = mealEntries.filter((m) => m.ym === ym);
   const monthBazar = bazarEntries.filter((b) => b.ym === ym);
-  const monthExpenses = expenses.filter((e) => e.ym === ym);
+  // Personal expenses (toothpaste, snacks, ...) are never shared — excluded
+  // up front so they never reach any charge/contribution calculation below.
+  const monthExpenses = expenses.filter((e) => e.ym === ym && !e.personal);
   const monthPayments = payments.filter((p) => p.ym === ym);
   const monthAllocations = expenseAllocations.filter((a) => a.ym === ym);
 
@@ -479,9 +509,23 @@ export function calculateMemberMonthlySummary(
   // 2. Calculate rent share
   const rentShare = roundToTwoDecimals(getPerBedRent(member, rooms));
 
-  // 3. Calculate expense shares
+  // 3. Calculate expense shares — excluding any expense this member paid for
+  // themselves. Their own share of it is settled immediately via an internal
+  // auto-payment (see createExpenseWithAccounting) and never gets a ledger
+  // charge of its own, so it must not appear here as an outstanding charge
+  // either — that amount is excluded from paymentsMade below for the same
+  // reason, so leaving it in here would double it into Total Charges. Both
+  // the expense list AND its persisted allocations must be filtered — an
+  // expenseId reachable only through monthAllocations would otherwise still
+  // pull the self-paid share back in via the allocations branch below.
+  const selfPaidExpenseIds = new Set(
+    monthExpenses.filter((e) => e.paidBy === member.id).map((e) => e.id),
+  );
   const { expenseShares, expenseShareBreakdown } = calculateMemberExpenseShares(
-    member, monthExpenses, activeMembers, monthAllocations,
+    member,
+    monthExpenses.filter((e) => e.paidBy !== member.id),
+    activeMembers,
+    monthAllocations.filter((a) => !selfPaidExpenseIds.has(a.expenseId)),
   );
 
   // 4. Calculate staff share
@@ -515,9 +559,14 @@ export function calculateMemberMonthlySummary(
     }
   });
 
-  // 7. Calculate payments made
+  // 7. Calculate payments made — excluding the internal "own share
+  // auto-paid" Payment document createExpenseWithAccounting records for a
+  // payer (referenceType "expense"). That document was never real money
+  // entering the mess's pool; it only marks the payer's own share (already
+  // excluded from expenseShares above) as settled, so counting it here too
+  // would inflate Total Contributions by that same self-settled amount.
   const paymentsMade = monthPayments
-    .filter((p) => p.memberId === member.id)
+    .filter((p) => p.memberId === member.id && p.referenceType !== "expense")
     .reduce((sum, p) => sum + (p.amount || 0), 0);
 
   // 8. Calculate advances given and outstanding
@@ -657,7 +706,10 @@ export function calculateCompleteMonthlySummary(
   const activeMembers = members.filter((m) => m.active);
   const monthMeals = mealEntries.filter((m) => m.ym === ym);
   const monthBazar = bazarEntries.filter((b) => b.ym === ym);
-  const monthExpenses = expenses.filter((e) => e.ym === ym);
+  // Personal expenses are never mess spending — excluded from the
+  // mess-wide total here for the same reason calculateMemberMonthlySummary
+  // excludes them per member.
+  const monthExpenses = expenses.filter((e) => e.ym === ym && !e.personal);
   const monthPayments = payments.filter((p) => p.ym === ym);
 
   // Build prevClosings from existing monthly closing records or accept directly

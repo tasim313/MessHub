@@ -770,24 +770,40 @@ export function calculateMemberToMemberSettlements(
 ): MemberToMemberSettlement[] {
   const settlements: MemberToMemberSettlement[] = [];
 
-  // 1. Expense settlements
-  expenses.filter((e) => e.ym === ym && e.paidBy).forEach((expense) => {
+  // 1. Expense settlements — personal expenses never enter a settlement (see
+  // Expense.personal); a custom_percentage/per_member expense owes exactly
+  // what the admin assigned per member, not an equal split.
+  expenses.filter((e) => e.ym === ym && e.paidBy && !e.personal).forEach((expense) => {
     const payer = activeMembers.find((m) => m.id === expense.paidBy!);
     if (!payer) return;
-    const serviceType = EXPENSE_CATEGORY_TO_SERVICE[expense.category] as string | undefined;
-    const subscribers = serviceType
-      ? activeMembers.filter((m) => isSubscribed(m, serviceType))
-      : activeMembers;
-    const perShare = round((expense.amount || 0) / (subscribers.length || 1));
 
-    subscribers.forEach((member) => {
+    let shareOf: (member: Member) => number;
+    if (expense.allocationMethod === "custom_percentage" && expense.customPercentages) {
+      const pct = expense.customPercentages;
+      shareOf = (member) => round(((pct[member.id] || 0) * (expense.amount || 0)) / 100);
+    } else if (expense.allocationMethod === "per_member" && expense.customAmounts) {
+      const amounts = expense.customAmounts;
+      shareOf = (member) => round(amounts[member.id] || 0);
+    } else {
+      const serviceType = EXPENSE_CATEGORY_TO_SERVICE[expense.category] as string | undefined;
+      const subscribers = serviceType
+        ? activeMembers.filter((m) => isSubscribed(m, serviceType))
+        : activeMembers;
+      const perShare = round((expense.amount || 0) / (subscribers.length || 1));
+      const subscriberIds = new Set(subscribers.map((m) => m.id));
+      shareOf = (member) => (subscriberIds.has(member.id) ? perShare : 0);
+    }
+
+    activeMembers.forEach((member) => {
       if (member.id === expense.paidBy) return;
+      const amount = shareOf(member);
+      if (amount <= 0) return;
       settlements.push({
         fromMemberId: member.id,
         fromMemberName: member.name,
         toMemberId: expense.paidBy!,
         toMemberName: payer.name,
-        amount: perShare,
+        amount,
         reason: `${EXPENSE_CATEGORY_LABELS[expense.category] || expense.category} - ${expense.date}`,
         category: expense.category,
         date: expense.date,

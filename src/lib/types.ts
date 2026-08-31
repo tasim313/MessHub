@@ -232,9 +232,19 @@ export interface Expense {
   // Set when this expense was auto-generated from a RecurringBill template —
   // used to guard against generating the same month's bill twice.
   recurringBillId?: string;
+  // True for a personal expense (e.g. toothpaste, snacks) that only belongs
+  // to `paidBy` — recorded for that member's own record-keeping but never
+  // allocated to other members, never charged to anyone, and excluded from
+  // every settlement/contribution calculation. Absent/false = a normal
+  // shared mess expense (the default, and the only kind before this field
+  // existed).
+  personal?: boolean;
   // Per-member percentage split (memberId -> percent 0-100), used when
   // allocationMethod === "custom_percentage"
   customPercentages?: Record<string, number>;
+  // Per-member exact amount split (memberId -> Tk, should sum to `amount`),
+  // used when allocationMethod === "per_member"
+  customAmounts?: Record<string, number>;
   // Status
   status: ExpenseStatus;
   // Receipt/image URL
@@ -695,6 +705,24 @@ export interface RecurringBill {
   active: boolean;
   createdBy?: string;
   createdAt?: number;
+}
+
+/**
+ * Mess-wide configuration, stored as a single document at settings/general.
+ * Never hard-code a policy the admin should be able to choose — read this
+ * instead.
+ */
+export interface MessSettings {
+  id: string;
+  // How rent is charged for a member's join month (and, if they later leave,
+  // their final month): "full_month" always charges the full per-bed share
+  // regardless of how many days they actually stayed (the original,
+  // still-default behavior); "by_days" prorates that one month by actual
+  // days stayed. Every other month in between is always charged in full
+  // either way — only the boundary month(s) are affected.
+  rentProrationPolicy?: "full_month" | "by_days";
+  updatedAt?: number;
+  updatedBy?: string;
 }
 
 export interface Report {
