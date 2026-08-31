@@ -30,6 +30,7 @@ import { db } from "./firebase";
 import type { Member, Expense, ExpenseAllocation, Bazar, Room, Staff } from "./types";
 import { EXPENSE_CATEGORY_LABELS } from "./types";
 import { createAdvance } from "./advance-service";
+import { withoutUndefined } from "./data";
 
 // ============================================================================
 // 1. CREATE EXPENSE WITH FULL ACCOUNTING WORKFLOW
@@ -79,11 +80,12 @@ export async function createExpenseWithAccounting(
     status: paidBy ? "paid" : "pending",
     description: expenseData.description,
     notes: expenseData.notes,
+    recurringBillId: expenseData.recurringBillId,
     createdAt: Date.now(),
     createdBy: uid,
   };
 
-  batch.set(expenseRef, newExpense);
+  batch.set(expenseRef, withoutUndefined(newExpense as unknown as Record<string, unknown>));
 
   // 2. Calculate and create expense allocations
   const serviceType = getServiceTypeForExpenseCategory(newExpense.category);
@@ -115,7 +117,7 @@ export async function createExpenseWithAccounting(
       createdBy: uid,
     };
 
-    batch.set(doc(db, "expense_allocations", allocation.id), allocation);
+    batch.set(doc(db, "expense_allocations", allocation.id), withoutUndefined(allocation as unknown as Record<string, unknown>));
 
     // Track payer's share for auto-payment
     if (member.id === paidBy) {
@@ -126,7 +128,7 @@ export async function createExpenseWithAccounting(
     // (payer's charge is handled by the internal payment)
     if (member.id !== paidBy && memberAmount > 0 && isSubscribed) {
       const chargeId = `charge_${expenseId}_${member.id}`;
-      batch.set(doc(db, "ledgers", chargeId), {
+      batch.set(doc(db, "ledgers", chargeId), withoutUndefined({
         memberId: member.id,
         memberName: member.name,
         date: newExpense.date,
@@ -137,9 +139,11 @@ export async function createExpenseWithAccounting(
         notes: `${EXPENSE_CATEGORY_LABELS[newExpense.category] || newExpense.category} for ${expenseYm}`,
         referenceId: expenseId,
         referenceType: "expense",
+        chargeStatus: "pending",
+        paidAmount: 0,
         createdAt: Date.now(),
         createdBy: uid,
-      });
+      }));
     }
   });
 
@@ -149,7 +153,7 @@ export async function createExpenseWithAccounting(
     //    This makes it show up in the Payments section
     if (payerShare > 0) {
       const paymentRef = doc(collection(db, "payments"));
-      batch.set(paymentRef, {
+      batch.set(paymentRef, withoutUndefined({
         memberId: paidBy,
         memberName: paidByName,
         amount: payerShare,
@@ -163,11 +167,11 @@ export async function createExpenseWithAccounting(
         referenceType: "expense",
         createdAt: Date.now(),
         createdBy: uid,
-      });
+      }));
 
       // b) Record ledger entry for this payment
       const payerLedgerId = `payment_${expenseId}_${paidBy}`;
-      batch.set(doc(db, "ledgers", payerLedgerId), {
+      batch.set(doc(db, "ledgers", payerLedgerId), withoutUndefined({
         memberId: paidBy,
         memberName: paidByName,
         date: newExpense.date,
@@ -180,14 +184,14 @@ export async function createExpenseWithAccounting(
         referenceType: "expense",
         createdAt: Date.now(),
         createdBy: uid,
-      });
+      }));
     }
 
     // c) Create advance for excess (expense - payer's share)
     const advanceAmount = amount - payerShare;
     if (advanceAmount > 0) {
       const advanceRef = doc(collection(db, "advances"));
-      batch.set(advanceRef, {
+      batch.set(advanceRef, withoutUndefined({
         memberId: paidBy,
         memberName: paidByName,
         amount: advanceAmount,
@@ -199,11 +203,11 @@ export async function createExpenseWithAccounting(
         status: "outstanding",
         createdAt: Date.now(),
         createdBy: uid,
-      });
+      }));
 
       // d) Ledger entry for advance
       const advanceLedgerId = `advance_${expenseId}_${paidBy}`;
-      batch.set(doc(db, "ledgers", advanceLedgerId), {
+      batch.set(doc(db, "ledgers", advanceLedgerId), withoutUndefined({
         memberId: paidBy,
         memberName: paidByName,
         date: newExpense.date,
@@ -216,7 +220,7 @@ export async function createExpenseWithAccounting(
         referenceType: "expense",
         createdAt: Date.now(),
         createdBy: uid,
-      });
+      }));
     }
   }
 
@@ -252,7 +256,7 @@ export async function createBazarWithAccounting(
   const buyerId = bazarData.buyerId || "";
   const buyerName = bazarData.buyerName || "";
 
-  batch.set(bazarRef, {
+  batch.set(bazarRef, withoutUndefined({
     id: bazarId,
     date: bazarData.date || "",
     ym,
@@ -264,13 +268,13 @@ export async function createBazarWithAccounting(
     notes: bazarData.notes || "",
     createdAt: Date.now(),
     createdBy: uid,
-  });
+  }));
 
   // 2. Record bazar contribution in payments → THIS IS THE KEY FIX
   //    Makes bazar contributions visible in the Payments section
   if (buyerId && buyerName && bazarData.total && bazarData.total > 0) {
     const paymentRef = doc(collection(db, "payments"));
-    batch.set(paymentRef, {
+    batch.set(paymentRef, withoutUndefined({
       memberId: buyerId,
       memberName: buyerName,
       amount: bazarData.total,
@@ -284,11 +288,11 @@ export async function createBazarWithAccounting(
       referenceType: "bazar",
       createdAt: Date.now(),
       createdBy: uid,
-    });
+    }));
 
     // 3. Ledger entry for bazar contribution
     const ledgerRef = doc(collection(db, "ledgers"));
-    batch.set(ledgerRef, {
+    batch.set(ledgerRef, withoutUndefined({
       memberId: buyerId,
       memberName: buyerName,
       date: bazarData.date || "",
@@ -301,7 +305,7 @@ export async function createBazarWithAccounting(
       referenceType: "bazar",
       createdAt: Date.now(),
       createdBy: uid,
-    });
+    }));
   }
 
   await batch.commit();
