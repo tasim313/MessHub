@@ -572,6 +572,61 @@ function MonthlyClosingPage() {
           </Card>
         )}
 
+        {/* Member Settlement Summary — who gave what, who owes what, at a glance */}
+        <Card className="p-5">
+          <h3 className="font-semibold">Member Settlement Summary — {ym}</h3>
+          <p className="text-xs text-muted-foreground mt-1 mb-4">
+            What each member actually paid this month vs. their fair share of every cost (rent + meals + utilities + staff). Full breakdown by category is below.
+          </p>
+          {monthSummary.perMember.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">No data for this month</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-xs uppercase text-muted-foreground bg-muted/50">
+                  <tr>
+                    <th className="text-left p-3 font-medium">Member</th>
+                    <th className="text-right p-3 font-medium">Total Paid</th>
+                    <th className="text-right p-3 font-medium">Fair Share</th>
+                    <th className="text-right p-3 font-medium">Balance</th>
+                    <th className="text-center p-3 font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {monthSummary.perMember.map((p) => (
+                    <tr key={p.memberId} className="border-t hover:bg-muted/30">
+                      <td className="p-3 font-medium">{p.memberName}</td>
+                      <td className="p-3 text-right tabular-nums text-primary">{bdt(p.totalContributions)}</td>
+                      <td className="p-3 text-right tabular-nums">{bdt(p.totalCharges)}</td>
+                      <td className={`p-3 text-right tabular-nums font-bold ${p.balance >= 0 ? "text-primary" : "text-destructive"}`}>
+                        {p.balance >= 0 ? "+" : "-"}{bdt(Math.abs(p.balance))}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                          p.settlementStatus === "settled" ? "bg-primary/10 text-primary" :
+                          p.settlementStatus === "receive" ? "bg-green-500/10 text-green-600" :
+                          "bg-destructive/10 text-destructive"
+                        }`}>
+                          {p.settlementStatus === "receive" ? "Will Receive" : p.settlementStatus === "pay" ? "Must Pay" : "Settled"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="font-semibold bg-muted/30 border-t-2">
+                  <tr>
+                    <td className="p-3">Total</td>
+                    <td className="p-3 text-right">{bdt(monthSummary.perMember.reduce((s, p) => s + p.totalContributions, 0))}</td>
+                    <td className="p-3 text-right">{bdt(monthSummary.perMember.reduce((s, p) => s + p.totalCharges, 0))}</td>
+                    <td className="p-3 text-right">{bdt(monthSummary.perMember.reduce((s, p) => s + p.balance, 0))}</td>
+                    <td className="p-3"></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </Card>
+
         {/* Member Breakdown */}
         <Card className="p-5">
           <h3 className="font-semibold mb-4">Member Breakdown — {ym}</h3>
@@ -765,7 +820,10 @@ function MonthlyClosingPage() {
                  </p>
                </div>
                <div className="text-right">
-                 <div className="text-xs text-muted-foreground">Total Settlements</div>
+                 <div className="text-xs text-muted-foreground flex items-center justify-end gap-1">
+                   <CheckCircle2 className="h-3 w-3 text-primary" />
+                   Total Receivable = Total Payable
+                 </div>
                  <div className="text-lg font-bold text-primary">{bdt(totalSettlementAmount)}</div>
                  <div className="text-xs text-muted-foreground">{memberToMemberSettlements.length} transfers</div>
                </div>
