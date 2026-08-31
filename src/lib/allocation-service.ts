@@ -26,6 +26,7 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 import type { ChargeAllocation, LedgerEntry } from "./types";
+import { withoutUndefined } from "./data";
 
 const CHARGE_TRANSACTION_TYPES = ["meal_charge", "rent_charge", "utility_charge", "staff_charge", "other_charge"];
 
@@ -93,7 +94,7 @@ export async function allocateToCharges(
       createdAt: Date.now(),
       createdBy: uid,
     };
-    await addDoc(collection(db, "charge_allocations"), allocationData);
+    await addDoc(collection(db, "charge_allocations"), withoutUndefined(allocationData as unknown as Record<string, unknown>));
 
     const newPaidAmount = Math.round(((charge.paidAmount || 0) + allocAmount) * 100) / 100;
     const newStatus = newPaidAmount >= (charge.amount || 0) - 0.01 ? "paid" : "partial";

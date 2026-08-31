@@ -31,6 +31,7 @@ import { db } from "./firebase";
 import type { Payment, Advance, AdvanceRecovery } from "./types";
 import { processAdvanceRecoveryFromPayment } from "./advance-service";
 import { fetchOutstandingCharges, allocatePaymentToCharges } from "./allocation-service";
+import { withoutUndefined } from "./data";
 
 // ============================================================================
 // RECORD PAYMENT WITH AUTOMATIC ADVANCE RECOVERY
@@ -89,7 +90,7 @@ export async function recordPaymentWithAdvanceRecovery(
     createdBy: uid,
   };
 
-  const paymentRef = await addDoc(collection(db, "payments"), paymentData);
+  const paymentRef = await addDoc(collection(db, "payments"), withoutUndefined(paymentData as unknown as Record<string, unknown>));
   const paymentId = paymentRef.id;
 
   let chargeAllocations: { chargeId: string; category: string; amount: number }[] = [];
@@ -112,7 +113,7 @@ export async function recordPaymentWithAdvanceRecovery(
       chargeAllocations = targetResult.allocations;
       stillUnallocated = targetResult.remaining;
       if (targetResult.totalAllocated > 0) {
-        await addDoc(collection(db, "ledgers"), {
+        await addDoc(collection(db, "ledgers"), withoutUndefined({
           memberId, memberName, date, ym,
           transactionType: "payment",
           category: category || targetCharge.category || "other",
@@ -122,7 +123,7 @@ export async function recordPaymentWithAdvanceRecovery(
           referenceType: "payment",
           createdAt: Date.now(),
           createdBy: uid,
-        });
+        }));
       }
     }
   }
@@ -152,7 +153,7 @@ export async function recordPaymentWithAdvanceRecovery(
       stillUnallocated = allocResult.remaining;
 
       if (allocResult.totalAllocated > 0) {
-        await addDoc(collection(db, "ledgers"), {
+        await addDoc(collection(db, "ledgers"), withoutUndefined({
           memberId, memberName, date, ym,
           transactionType: "payment",
           category: category || "other",
@@ -162,7 +163,7 @@ export async function recordPaymentWithAdvanceRecovery(
           referenceType: "payment",
           createdAt: Date.now(),
           createdBy: uid,
-        });
+        }));
       }
     }
   }
@@ -173,7 +174,7 @@ export async function recordPaymentWithAdvanceRecovery(
   // overpayment via this path silently never became a visible deposit.
   const remainingAmount = Math.round((stillUnallocated || 0) * 100) / 100;
   if (remainingAmount > 0.01) {
-    await addDoc(collection(db, "ledgers"), {
+    await addDoc(collection(db, "ledgers"), withoutUndefined({
       memberId,
       memberName,
       date,
@@ -186,7 +187,7 @@ export async function recordPaymentWithAdvanceRecovery(
       referenceType: "payment",
       createdAt: Date.now(),
       createdBy: uid,
-    });
+    }));
   }
 
   return {
@@ -228,7 +229,7 @@ export async function handleExpenseFinancials(
 
   // Record internal payment for the payer's own share
   if (payerShare > 0) {
-    const paymentRef = await addDoc(collection(db, "payments"), {
+    const paymentRef = await addDoc(collection(db, "payments"), withoutUndefined({
       memberId: payerId,
       memberName: payerName,
       amount: payerShare,
@@ -242,11 +243,11 @@ export async function handleExpenseFinancials(
       referenceType: "expense",
       createdAt: Date.now(),
       createdBy: uid,
-    });
+    }));
     internalPaymentId = paymentRef.id;
 
     // Record in ledger
-    await addDoc(collection(db, "ledgers"), {
+    await addDoc(collection(db, "ledgers"), withoutUndefined({
       memberId: payerId,
       memberName: payerName,
       date: expenseDate,
@@ -259,7 +260,7 @@ export async function handleExpenseFinancials(
       referenceType: "expense",
       createdAt: Date.now(),
       createdBy: uid,
-    });
+    }));
   }
 
   // Create advance for excess

@@ -26,6 +26,7 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 import type { Advance, AdvanceRecovery, LedgerEntry, Expense } from "./types";
+import { withoutUndefined } from "./data";
 
 // ============================================================================
 // CREATE ADVANCE
@@ -67,11 +68,11 @@ export async function createAdvance(
     createdBy: uid,
   };
 
-  const docRef = await addDoc(collection(db, "advances"), advanceData);
+  const docRef = await addDoc(collection(db, "advances"), withoutUndefined(advanceData as unknown as Record<string, unknown>));
   const advanceId = docRef.id;
 
   // Create ledger entry for the advance
-  await addDoc(collection(db, "ledgers"), {
+  await addDoc(collection(db, "ledgers"), withoutUndefined({
     memberId,
     memberName,
     date: `${ym}-01`,
@@ -84,7 +85,7 @@ export async function createAdvance(
     referenceType: "advance",
     createdAt: Date.now(),
     createdBy: uid,
-  });
+  }));
 
   return advanceId;
 }
@@ -165,7 +166,7 @@ export async function processAdvanceRecoveryFromPayment(
           createdAt: Date.now(),
           createdBy: uid,
         };
-        await addDoc(collection(db, "advance_recoveries"), recoveryData);
+        await addDoc(collection(db, "advance_recoveries"), withoutUndefined(recoveryData as unknown as Record<string, unknown>));
 
         // Update the advance record
         const newRemainingAmount = advance.remainingAmount - recoveryAmount;
@@ -177,7 +178,7 @@ export async function processAdvanceRecoveryFromPayment(
         });
 
         // Create ledger entry for the advance owner (receiving recovery)
-        await addDoc(collection(db, "ledgers"), {
+        await addDoc(collection(db, "ledgers"), withoutUndefined({
           memberId: advance.memberId,
           memberName: advance.memberName,
           date,
@@ -190,7 +191,7 @@ export async function processAdvanceRecoveryFromPayment(
           referenceType: "payment",
           createdAt: Date.now(),
           createdBy: uid,
-        });
+        }));
       }
     }
 
