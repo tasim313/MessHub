@@ -503,6 +503,24 @@ function MembersPage() {
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-2">
+                      <Label>Joining date</Label>
+                      <Input
+                        type="date"
+                        value={form.joiningDate || ""}
+                        onChange={(e) => setForm({ ...form, joiningDate: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Leaving date (if moved out)</Label>
+                      <Input
+                        type="date"
+                        value={form.leavingDate || ""}
+                        onChange={(e) => setForm({ ...form, leavingDate: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
                       <Label>Status</Label>
                       <Select
                         value={form.status || "active"}

@@ -4,7 +4,7 @@ import { useAuth } from "@/lib/auth-context";
 import { AppShell } from "@/components/app/AppShell";
 import { Loader2 } from "lucide-react";
 import { useCollection, type Member, type Room, type Staff } from "@/lib/data";
-import type { RentCharge, LedgerEntry, Expense, RecurringBill } from "@/lib/types";
+import type { RentCharge, LedgerEntry, Expense, RecurringBill, MessSettings } from "@/lib/types";
 import { ensureRentChargesUpToDate } from "@/lib/rent-service";
 import { ensureStaffChargesUpToDate } from "@/lib/staff-charge-service";
 import { ensureRecurringExpensesUpToDate } from "@/lib/recurring-bill-service";
@@ -31,6 +31,7 @@ function useAutoMonthlyGeneration(enabled: boolean) {
   const { data: ledgers } = useCollection<LedgerEntry>("ledgers");
   const { data: expenses } = useCollection<Expense>("expenses");
   const { data: recurringBills } = useCollection<RecurringBill>("recurring_bills");
+  const { data: settings } = useCollection<MessSettings>("settings");
   const ranRef = useRef(false);
 
   useEffect(() => {
@@ -38,7 +39,8 @@ function useAutoMonthlyGeneration(enabled: boolean) {
     if (members.length === 0 || rooms.length === 0) return;
     ranRef.current = true;
 
-    ensureRentChargesUpToDate(members, rooms, rentCharges, ledgers)
+    const rentProrationPolicy = settings.find((s) => s.id === "general")?.rentProrationPolicy || "full_month";
+    ensureRentChargesUpToDate(members, rooms, rentCharges, ledgers, undefined, rentProrationPolicy)
       .then((result) => {
         if (result.created > 0) toast.success(`Rent auto-generated for ${result.months.join(", ")}`);
       })
@@ -57,7 +59,7 @@ function useAutoMonthlyGeneration(enabled: boolean) {
       .catch((err) => console.error("Auto recurring bill generation failed", err));
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, members, rooms, staff, rentCharges, ledgers, expenses, recurringBills]);
+  }, [enabled, members, rooms, staff, rentCharges, ledgers, expenses, recurringBills, settings]);
 }
 
 function AuthedLayout() {

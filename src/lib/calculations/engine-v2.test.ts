@@ -403,14 +403,17 @@ describe("calculateMemberMonthlySummary", () => {
     // Rent: member_a has room_1 with totalBeds=2, monthlyRent=10000 → 10000/2 = 5000
     expect(result.rentShare).toBe(5000);
 
-    // Internet: 1000/3 = 333.33
-    expect(result.expenseShares).toBeCloseTo(333.33, 1);
+    // Internet: A paid the whole 1000 Tk bill themselves, so their own
+    // 333.33 share is settled immediately via an internal auto-payment and
+    // must not appear as an outstanding charge (see expenseContributions
+    // below for where that internal payment shows up instead).
+    expect(result.expenseShares).toBe(0);
 
     // Staff: 4000 (as calculated above)
     expect(result.staffShare).toBeCloseTo(4000, 1);
 
-    // Total charges: 750 + 5000 + 333.33 + 4000 = 10083.33
-    expect(result.totalCharges).toBeCloseTo(10083.33, 1);
+    // Total charges: 750 + 5000 + 0 + 4000 = 9750
+    expect(result.totalCharges).toBeCloseTo(9750, 1);
 
     // Bazar contribution: 500 + 700 = 1200
     expect(result.bazarContribution).toBe(1200);
@@ -425,10 +428,63 @@ describe("calculateMemberMonthlySummary", () => {
     // Total contributions: 1200 (bazar) + 666.67 (expense excess) + 0 (no payments for A) = 1866.67
     expect(result.totalContributions).toBeCloseTo(1866.67, 1);
 
-    // Balance: 1866.67 - 10083.33 = -8216.66 (member owes mess)
-    expect(result.balance).toBeCloseTo(-8216.66, 1);
+    // Balance: 1866.67 - 9750 = -7883.33 (member owes mess)
+    expect(result.balance).toBeCloseTo(-7883.33, 1);
     expect(result.settlementStatus).toBe("pay");
-    expect(result.creditAmount).toBeCloseTo(8216.66, 1);
+    expect(result.creditAmount).toBeCloseTo(7883.33, 1);
+  });
+
+  it("excludes a personal expense from charges and contributions entirely", () => {
+    const member = createMember();
+    const members = createMembers();
+    const activeMembers = members.filter((m) => m.active);
+    const personalExpense = createExpense({
+      id: "toothpaste", category: "other_shared", amount: 120,
+      paidBy: "member_a", paidByName: "Member A", personal: true,
+    });
+
+    const result = calculateMemberMonthlySummary(
+      member, "2026-06", [], [], [personalExpense], [], [], [], [],
+      [], [], activeMembers, [],
+    );
+
+    expect(result.expenseShares).toBe(0);
+    expect(Object.keys(result.expenseShareBreakdown)).toHaveLength(0);
+    expect(result.expenseContributions).toBe(0);
+    expect(result.totalContributions).toBe(0);
+    expect(result.totalCharges).toBe(0);
+    expect(result.balance).toBe(0);
+  });
+
+  it("splits by custom percentage instead of an equal share", () => {
+    const members = createMembers(); // member_a, member_b, member_c
+    const activeMembers = members;
+    const expense = createExpense({
+      id: "detergent", category: "other_shared", amount: 600,
+      allocationMethod: "custom_percentage",
+      customPercentages: { member_a: 40, member_b: 20, member_c: 40 },
+      paidBy: "member_c", paidByName: "Member C",
+    });
+
+    const a = calculateMemberMonthlySummary(
+      members[0], "2026-06", [], [], [expense], [], [], [], [],
+      [], [], activeMembers, [],
+    );
+    const b = calculateMemberMonthlySummary(
+      members[1], "2026-06", [], [], [expense], [], [], [], [],
+      [], [], activeMembers, [],
+    );
+    const c = calculateMemberMonthlySummary(
+      members[2], "2026-06", [], [], [expense], [], [], [], [],
+      [], [], activeMembers, [],
+    );
+
+    expect(a.expenseShares).toBeCloseTo(240, 2);
+    expect(b.expenseShares).toBeCloseTo(120, 2);
+    // C paid the bill — their own 40% share is excluded as a charge.
+    expect(c.expenseShares).toBe(0);
+    // C recovers the excess fronted for A and B: 600 - 240 = 360.
+    expect(c.expenseContributions).toBeCloseTo(360, 2);
   });
 });
 

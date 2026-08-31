@@ -9,13 +9,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Textarea } from "@/components/ui/textarea";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { useCollection, addDocTo, updateDocIn, deleteDocFrom, orderBy, type Bazar, type Member } from "@/lib/data";
+import { useCollection, addDocTo, updateDocIn, orderBy, type Bazar, type Member } from "@/lib/data";
 import { dayKey, bdt } from "@/lib/format";
 import { Plus, Trash2, ShoppingBasket, Search, Pencil, Filter, X, Download } from "lucide-react";
 import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
 import { exportToCSV } from "@/lib/export";
-import { createBazarWithAccounting } from "@/lib/workflow-integration";
+import { createBazarWithAccounting, deleteBazarWithAccounting } from "@/lib/workflow-integration";
 
 export const Route = createFileRoute("/_authed/bazar")({
   component: BazarPage,
@@ -431,7 +431,7 @@ function BazarPage() {
                                 <Button size="sm" variant="ghost" className="h-7 px-2 text-destructive hover:text-destructive" onClick={async () => {
                                   if (!profile) return;
                                   if (profile.role === "owner") {
-                                    await deleteDocFrom("bazar", b.id);
+                                    await deleteBazarWithAccounting(b.id);
                                     toast.success("Deleted");
                                   } else {
                                     await submitChangeRequest({ collectionName: "bazar", action: "delete", title: `Delete bazar ${b.category}`, actor: { uid: profile.uid, name: profile.name, role: profile.role }, targetId: b.id, previousData: b });

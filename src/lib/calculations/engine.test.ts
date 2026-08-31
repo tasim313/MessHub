@@ -39,7 +39,7 @@ import {
   validateMonthlyClosing,
   validateDepositCreditMutualExclusivity,
 } from "./engine";
-import type { Member, MealEntry, Bazar, Deposit, Credit, Payment, LedgerEntry, Staff, Room, Utility } from "@/lib/types";
+import type { Member, MealEntry, Bazar, Deposit, Credit, Payment, LedgerEntry, Staff, Room, Utility, Expense, ExpenseAllocation } from "@/lib/types";
 
 // ============================================================================
 // Test Data Factories
@@ -180,6 +180,34 @@ function createUtility(overrides: Partial<Utility> = {}): Utility {
     type: "electricity",
     amount: 2000,
     date: "2024-01-15",
+    ...overrides,
+  };
+}
+
+function createExpense(overrides: Partial<Expense> = {}): Expense {
+  return {
+    id: `expense-${Math.random().toString(36).slice(2, 9)}`,
+    ym: "2024-01",
+    category: "other_shared",
+    amount: 600,
+    date: "2024-01-15",
+    allocationMethod: "equal",
+    status: "pending",
+    ...overrides,
+  };
+}
+
+function createExpenseAllocation(overrides: Partial<ExpenseAllocation> = {}): ExpenseAllocation {
+  return {
+    id: `alloc-${Math.random().toString(36).slice(2, 9)}`,
+    expenseId: "expense-1",
+    memberId: "member-1",
+    memberName: "Test Member",
+    category: "other_shared",
+    amount: 150,
+    subscribed: true,
+    ym: "2024-01",
+    status: "pending",
     ...overrides,
   };
 }
@@ -1335,5 +1363,118 @@ describe("Unitary Method (ঐকিক নিয়ম) Verification", () => {
 
     // Sum of shares must equal total expense
     expect(p1.utilityShare + p2.utilityShare + p3.utilityShare).toBeCloseTo(3000, 0);
+  });
+});
+
+// ============================================================================
+// Custom Expense Allocation (percentage-based / exact per-member amount)
+// ============================================================================
+
+describe("Custom Expense Allocation", () => {
+  const members = [
+    createMember({ id: "A", name: "A" }),
+    createMember({ id: "B", name: "B" }),
+    createMember({ id: "C", name: "C" }),
+    createMember({ id: "D", name: "D" }),
+  ];
+
+  it("splits by custom percentage (40/20/20/20 on a 600 Tk expense) via persisted allocations", () => {
+    // Real-world scenario: a detergent bought for the whole mess, split
+    // unevenly because A uses it more. C fronted the full amount.
+    const expense = createExpense({
+      id: "detergent", amount: 600, category: "other_shared",
+      allocationMethod: "custom_percentage",
+      customPercentages: { A: 40, B: 20, C: 20, D: 20 },
+      paidBy: "C", paidByName: "C",
+    });
+    const allocations = [
+      createExpenseAllocation({ expenseId: "detergent", memberId: "A", memberName: "A", amount: 240, ym: "2024-01" }),
+      createExpenseAllocation({ expenseId: "detergent", memberId: "B", memberName: "B", amount: 120, ym: "2024-01" }),
+      createExpenseAllocation({ expenseId: "detergent", memberId: "C", memberName: "C", amount: 120, ym: "2024-01" }),
+      createExpenseAllocation({ expenseId: "detergent", memberId: "D", memberName: "D", amount: 120, ym: "2024-01" }),
+    ];
+    // The internal "own share auto-paid" payment createExpenseWithAccounting
+    // records for the payer (C) — matches C's persisted allocation (120).
+    const payments = [
+      createPayment({
+        memberId: "C", memberName: "C", amount: 120, ym: "2024-01",
+        referenceId: "detergent", referenceType: "expense",
+        notes: "Internal: C's own share of Other Shared Expenses (auto-recorded)",
+      }),
+    ];
+
+    const settlementFor = (m: Member) => calculateMemberSettlement(
+      m, "2024-01", [], [], [], [], payments, [], [expense], members, [], [], [], allocations, [], [],
+    );
+
+    const a = settlementFor(members[0]);
+    const b = settlementFor(members[1]);
+    const c = settlementFor(members[2]);
+    const d = settlementFor(members[3]);
+
+    expect(a.charges.expenseShareBreakdown.other_shared).toBeCloseTo(240, 2);
+    expect(b.charges.expenseShareBreakdown.other_shared).toBeCloseTo(120, 2);
+    expect(d.charges.expenseShareBreakdown.other_shared).toBeCloseTo(120, 2);
+
+    // C fronted the whole bill — their own 120 Tk share must NOT show up as
+    // an outstanding charge (it's already settled via the internal payment).
+    expect(c.charges.expenseShareBreakdown.other_shared || 0).toBe(0);
+
+    // C should recover the excess they fronted for everyone else: 600 - 120 = 480.
+    expect(c.balance).toBeCloseTo(480, 2);
+    expect(c.contributions.expenseContributions).toBeCloseTo(480, 2);
+
+    // The internal self-settlement payment must not inflate C's Total
+    // Contributions beyond that same 480 excess.
+    expect(c.contributions.paymentsMade).toBe(0);
+  });
+
+  it("splits by exact per-member amount (rent-style unequal shares)", () => {
+    const expense = createExpense({
+      id: "rent-like", amount: 19000, category: "other_shared",
+      allocationMethod: "per_member",
+      customAmounts: { A: 6000, B: 4000, C: 4000, D: 5000 },
+      paidBy: "A", paidByName: "A",
+    });
+    const allocations = [
+      createExpenseAllocation({ expenseId: "rent-like", memberId: "A", memberName: "A", amount: 6000, ym: "2024-01" }),
+      createExpenseAllocation({ expenseId: "rent-like", memberId: "B", memberName: "B", amount: 4000, ym: "2024-01" }),
+      createExpenseAllocation({ expenseId: "rent-like", memberId: "C", memberName: "C", amount: 4000, ym: "2024-01" }),
+      createExpenseAllocation({ expenseId: "rent-like", memberId: "D", memberName: "D", amount: 5000, ym: "2024-01" }),
+    ];
+    const payments = [
+      createPayment({
+        memberId: "A", memberName: "A", amount: 6000, ym: "2024-01",
+        referenceId: "rent-like", referenceType: "expense",
+        notes: "Internal: A's own share of Other Shared Expenses (auto-recorded)",
+      }),
+    ];
+
+    const settlementFor = (m: Member) => calculateMemberSettlement(
+      m, "2024-01", [], [], [], [], payments, [], [expense], members, [], [], [], allocations, [], [],
+    );
+
+    const a = settlementFor(members[0]);
+    const d = settlementFor(members[3]);
+
+    expect(a.charges.expenseShareBreakdown.other_shared || 0).toBe(0); // own share excluded
+    expect(d.charges.expenseShareBreakdown.other_shared).toBeCloseTo(5000, 2);
+
+    // A recovers 19000 - 6000 = 13000 from the rest.
+    expect(a.balance).toBeCloseTo(13000, 2);
+  });
+
+  it("falls back to the same custom percentage/amount split when allocations haven't been persisted yet", () => {
+    // Legacy-data path: no expense_allocations exist for this expense at all.
+    const pctExpense = createExpense({
+      id: "legacy-pct", amount: 600, category: "other_shared",
+      allocationMethod: "custom_percentage",
+      customPercentages: { A: 40, B: 20, C: 20, D: 20 },
+    });
+    const settlementFor = (m: Member) => calculateMemberSettlement(
+      m, "2024-01", [], [], [], [], [], [], [pctExpense], members, [], [], [], [], [], [],
+    );
+    expect(settlementFor(members[0]).charges.expenseShareBreakdown.other_shared).toBeCloseTo(240, 2);
+    expect(settlementFor(members[1]).charges.expenseShareBreakdown.other_shared).toBeCloseTo(120, 2);
   });
 });

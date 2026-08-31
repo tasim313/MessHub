@@ -317,6 +317,13 @@ function calculateMemberShareOfExpense(
     return mine?.amount || 0;
   }
 
+  if (expense.allocationMethod === "custom_percentage" && expense.customPercentages) {
+    return ((expense.customPercentages[member.id] || 0) * (expense.amount || 0)) / 100;
+  }
+  if (expense.allocationMethod === "per_member" && expense.customAmounts) {
+    return expense.customAmounts[member.id] || 0;
+  }
+
   const serviceType = getServiceTypeForExpenseCategory(expense.category);
   if (!serviceType) return (expense.amount || 0) / (activeMembers.length || 1);
   if (isMemberExplicitlyOptedOut(member, serviceType)) return 0;
@@ -567,6 +574,9 @@ export function calculateMemberContributions(
   const member = activeMembers.find((m) => m.id === memberId);
 
   monthExpenses.forEach((expense) => {
+    // A personal expense (toothpaste, snacks, ...) is never shared — it must
+    // not count as a mess contribution just because the member spent money.
+    if (expense.personal) return;
     if (expense.paidBy === memberId) {
       const cat = expense.category;
       const ownShare = member ? calculateMemberShareOfExpense(member, expense, activeMembers, monthAllocations) : 0;
@@ -685,6 +695,12 @@ export function calculateMemberCharges(
 
   expenseIds.forEach((expenseId) => {
     const allocationsForExpense = monthAllocations.filter((a) => a.expenseId === expenseId);
+    const expenseForId = monthExpenses.find((e) => e.id === expenseId);
+
+    // A personal expense is never shared — it must never appear as a charge
+    // against anyone (createExpenseWithAccounting never allocates one, so
+    // this only matters as a defensive guard against legacy/edge-case data).
+    if (expenseForId?.personal) return;
 
     // A member's own share of an expense they personally fronted is settled
     // immediately via an internal auto-payment (see createExpenseWithAccounting)
@@ -693,7 +709,6 @@ export function calculateMemberCharges(
     // same amount having just been excluded from paymentsMade in
     // calculateMemberContributions, inflating this category's total (and
     // Total Charges) by an amount the member already paid themselves.
-    const expenseForId = monthExpenses.find((e) => e.id === expenseId);
     if (expenseForId && expenseForId.paidBy === member.id) return;
 
     if (allocationsForExpense.length > 0) {
@@ -710,8 +725,31 @@ export function calculateMemberCharges(
     const expense = monthExpenses.find((e) => e.id === expenseId);
     if (!expense) return;
 
-    const serviceType = getServiceTypeForExpenseCategory(expense.category);
     let memberShare = 0;
+
+    // Legacy fallback for an expense with no persisted allocations yet —
+    // mirror the same custom_percentage/per_member handling
+    // createExpenseWithAccounting applies at creation time, so a pre-existing
+    // expense computed on the fly still respects an explicit admin-assigned
+    // split instead of silently falling back to an equal share.
+    if (expense.allocationMethod === "custom_percentage" && expense.customPercentages) {
+      memberShare = (expense.customPercentages[member.id] || 0) * (expense.amount || 0) / 100;
+      if (memberShare > 0) {
+        expenseShareBreakdown[expense.category] = roundToTwoDecimals((expenseShareBreakdown[expense.category] || 0) + memberShare);
+        expenseShares += memberShare;
+      }
+      return;
+    }
+    if (expense.allocationMethod === "per_member" && expense.customAmounts) {
+      memberShare = expense.customAmounts[member.id] || 0;
+      if (memberShare > 0) {
+        expenseShareBreakdown[expense.category] = roundToTwoDecimals((expenseShareBreakdown[expense.category] || 0) + memberShare);
+        expenseShares += memberShare;
+      }
+      return;
+    }
+
+    const serviceType = getServiceTypeForExpenseCategory(expense.category);
 
     if (serviceType && isMemberExplicitlyOptedOut(member, serviceType)) {
       // Always respect an explicit opt-out on this member.
