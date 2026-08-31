@@ -43,6 +43,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
+import { checkRoomExists } from "@/lib/duplicate-check";
 
 export const Route = createFileRoute("/_authed/rooms")({
   component: RoomsPage,
@@ -84,6 +85,7 @@ function RoomsPage() {
   const { data: members } = useCollection<Member>("members");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Room | null>(null);
+  const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [form, setForm] = useState<Omit<Room, "id">>(blankRoom);
 
@@ -130,13 +132,32 @@ function RoomsPage() {
 
   const saveRoom = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (saving) return;
     if (!profile) return;
     if (!form.roomNo.trim()) return toast.error("Room number is required");
     const payload = {
       ...form,
-      totalBeds: Number(form.totalBeds) || 0,
-      monthlyRent: Number(form.monthlyRent) || 0,
+      totalBeds: Math.max(0, Number(form.totalBeds) || 0),
+      monthlyRent: Math.max(0, Number(form.monthlyRent) || 0),
     };
+
+    // Never let totalBeds drop below the number of active members currently
+    // assigned to this room — otherwise occupancy silently exceeds capacity
+    // and per-bed rent lookups for those members stay stale/wrong.
+    if (editing) {
+      const currentOccupancy = occupancy.get(editing.id) || 0;
+      if (payload.totalBeds < currentOccupancy) {
+        return toast.error(
+          `Cannot set beds to ${payload.totalBeds} — ${currentOccupancy} active member(s) are still assigned to this room.`,
+        );
+      }
+    } else if (
+      await checkRoomExists(payload.buildingName, payload.roomNo)
+    ) {
+      return toast.error("A room with this building and room number already exists");
+    }
+
+    setSaving(true);
     try {
       if (profile.role === "owner" && editing) {
         await updateDocIn("rooms", editing.id, payload);
@@ -160,11 +181,20 @@ function RoomsPage() {
       reset();
     } catch (error) {
       toast.error((error as Error).message);
+    } finally {
+      setSaving(false);
     }
   };
 
   const deleteRoom = async (room: Room) => {
-    if (!profile || !confirm(`Delete room ${room.roomNo}?`)) return;
+    if (!profile) return;
+    const currentOccupancy = occupancy.get(room.id) || 0;
+    if (currentOccupancy > 0) {
+      return toast.error(
+        `Cannot delete room ${room.roomNo} — ${currentOccupancy} active member(s) are still assigned to it. Reassign them first.`,
+      );
+    }
+    if (!confirm(`Delete room ${room.roomNo}?`)) return;
     if (profile.role === "owner") {
       await deleteDocFrom("rooms", room.id);
       toast.success("Room deleted");
@@ -350,7 +380,7 @@ function RoomsPage() {
                     />
                   </div>
                   <DialogFooter>
-                    <Button type="submit">Save</Button>
+                    <Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save"}</Button>
                   </DialogFooter>
                 </form>
               </DialogContent>

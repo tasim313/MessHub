@@ -18,7 +18,7 @@ import {
   type Room,
 } from "@/lib/data";
 import { EXPENSE_CATEGORY_LABELS } from "@/lib/types";
-import type { MonthlyClosing, ExpenseAllocation, Expense, Advance, AdvanceRecovery } from "@/lib/types";
+import type { MonthlyClosing, ExpenseAllocation, Expense, Advance, AdvanceRecovery, CreditNote, Refund } from "@/lib/types";
 import { computeMonthly } from "@/lib/calc";
 import { ymKey, bdt } from "@/lib/format";
 import {
@@ -60,6 +60,8 @@ function ReportsPage() {
   const { data: allocations } = useCollection<ExpenseAllocation>("expense_allocations", [orderBy("createdAt", "desc")]);
   const { data: advances } = useCollection<Advance>("advances");
   const { data: advanceRecoveries } = useCollection<AdvanceRecovery>("advance_recoveries");
+  const { data: creditNotes } = useCollection<CreditNote>("credit_notes");
+  const { data: refunds } = useCollection<Refund>("refunds");
 
   // Build prevClosings for carry forward
   const prevClosings = useMemo(() => {
@@ -105,6 +107,8 @@ function ReportsPage() {
         advances,
         advanceRecoveries,
         closings,
+        creditNotes,
+        refunds,
       ),
     [
       ym,
@@ -122,6 +126,8 @@ function ReportsPage() {
       advances,
       advanceRecoveries,
       closings,
+      creditNotes,
+      refunds,
     ],
   );
 
@@ -162,7 +168,7 @@ function ReportsPage() {
         pdfMoney(p.previousDue),
         pdfMoney(p.totalDue),
         pdfMoney(p.deposited),
-        pdfMoney(p.balance),
+        `${p.balance >= 0 ? "Deposit " : "Due "}${pdfMoney(Math.abs(p.balance))}`,
       ]),
       styles: { fontSize: 9 },
       headStyles: { fillColor: [22, 163, 74] },
@@ -203,9 +209,22 @@ function ReportsPage() {
       XLSX.utils.json_to_sheet(expenses.filter((e: Expense) => e.ym === ym)),
       "Expenses",
     );
+    // Use the same auto-computed per-member deposit figures shown on screen
+    // (summary.perMember), not the raw `deposits` collection — that legacy
+    // collection is a separate, largely disconnected data source from the
+    // settlement engine and would export numbers that don't reconcile with
+    // the "Deposits" KPI card or the member breakdown table above.
     XLSX.utils.book_append_sheet(
       wb,
-      XLSX.utils.json_to_sheet(deposits.filter((d) => d.ym === ym)),
+      XLSX.utils.json_to_sheet(
+        summary.perMember
+          .filter((p) => p.deposited > 0)
+          .map((p) => ({
+            Member: p.memberName,
+            Deposit: p.deposited,
+            Source: p.depositSource || "",
+          })),
+      ),
       "Deposits",
     );
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(staff), "Staff");
@@ -351,8 +370,8 @@ function ReportsPage() {
             icon={TrendingUp}
           />
           <StatCard
-            label="Cash balance"
-            value={bdt(summary.cashBalance)}
+            label={summary.cashBalance >= 0 ? "Cash balance" : "Cash shortfall"}
+            value={bdt(Math.abs(summary.cashBalance))}
             icon={Wallet}
             tone={summary.cashBalance >= 0 ? "primary" : "danger"}
           />
@@ -410,7 +429,7 @@ function ReportsPage() {
                       <td
                         className={`text-right tabular-nums font-bold ${p.balance >= 0 ? "text-primary" : "text-destructive"}`}
                       >
-                        {bdt(p.balance)}
+                        {p.balance >= 0 ? "Deposit " : "Due "}{bdt(Math.abs(p.balance))}
                       </td>
                     </tr>
                   ))}

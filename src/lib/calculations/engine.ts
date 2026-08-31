@@ -34,6 +34,8 @@ import type {
   Expense,
   ExpenseAllocation,
   ExpenseCategory,
+  CreditNote,
+  Refund,
 } from "@/lib/types";
 import { EXPENSE_CATEGORY_LABELS } from "@/lib/types";
 
@@ -77,6 +79,8 @@ export interface MemberContributions {
   mealPaid: number;
   // Utility payments
   utilityPaid: number;
+  /** Total refunds paid back this month — reduces totalContribution (money physically returned) */
+  refundTotal: number;
   // Total of all contributions
   totalContribution: number;
 }
@@ -95,6 +99,8 @@ export interface MemberCharges {
   previousDue: number;
   previousDeposit: number;
   previousCredit: number;
+  /** Total credit notes applied this month — reduces totalCharges, never edits the original charge */
+  creditNoteTotal: number;
   totalCharges: number;
   // Breakdown of what makes up the charges for display
   chargeBreakdown: {
@@ -186,6 +192,8 @@ export interface PerMemberSummary {
   expenseContributions: Record<string, number>;
   carryForwardDeposit: number;
   carryForwardCredit: number;
+  creditNoteTotal: number;
+  refundTotal: number;
   // Detailed breakdown for UI
   creditReason: string | undefined;
   depositSource: string | undefined;
@@ -283,6 +291,43 @@ const STAFF_SERVICE_MAP: Record<string, string> = {
 function isMemberSubscribedToService(member: Member, serviceType: string): boolean {
   if (!member.services) return false;
   return member.services.some((s) => s.type === serviceType && s.enabled);
+}
+
+function isMemberExplicitlyOptedOut(member: Member, serviceType: string): boolean {
+  if (!member.services) return false;
+  return member.services.some((s) => s.type === serviceType && s.enabled === false);
+}
+
+/**
+ * A single member's own share of a single expense — preferring a persisted
+ * allocation for that exact expense, falling back to the same
+ * subscriber-based on-the-fly split used elsewhere. Used to figure out how
+ * much of an expense the PAYER themselves owed, so contribution totals can
+ * count only the excess they fronted for others (see calculateMemberContributions).
+ */
+function calculateMemberShareOfExpense(
+  member: Member,
+  expense: Expense,
+  activeMembers: Member[],
+  monthAllocations: ExpenseAllocation[],
+): number {
+  const allocationsForExpense = monthAllocations.filter((a) => a.expenseId === expense.id);
+  if (allocationsForExpense.length > 0) {
+    const mine = allocationsForExpense.find((a) => a.memberId === member.id);
+    return mine?.amount || 0;
+  }
+
+  const serviceType = getServiceTypeForExpenseCategory(expense.category);
+  if (!serviceType) return (expense.amount || 0) / (activeMembers.length || 1);
+  if (isMemberExplicitlyOptedOut(member, serviceType)) return 0;
+
+  let subscribers = activeMembers.filter((m) => isMemberSubscribedToService(m, serviceType));
+  if (subscribers.length === 0) {
+    subscribers = activeMembers.filter((m) => !isMemberExplicitlyOptedOut(m, serviceType));
+    if (subscribers.length === 0) subscribers = activeMembers;
+  }
+  if (!subscribers.some((m) => m.id === member.id)) return 0;
+  return (expense.amount || 0) / (subscribers.length || 1);
 }
 
 function getPerBedRent(member: Member, rooms: Room[]): number {
@@ -494,6 +539,9 @@ export function calculateMemberContributions(
   monthBazar: Bazar[],
   monthExpenses: Expense[],
   monthPayments: Payment[],
+  monthRefunds: Refund[] = [],
+  activeMembers: Member[] = [],
+  monthAllocations: ExpenseAllocation[] = [],
 ): MemberContributions {
   // 1. Bazar contributions (money the member spent on bazar)
   const bazarEntries: { buyer: string; amount: number }[] = [];
@@ -505,18 +553,28 @@ export function calculateMemberContributions(
     }
   });
 
-  // 2. Expense contributions - when a member pays an expense bill on behalf of the mess
+  // 2. Expense contributions - when a member pays an expense bill on behalf
+  // of the mess. Only the EXCESS beyond the payer's own share counts here —
+  // their own share is already reflected via paymentContributions below
+  // (the app auto-records an internal "own share paid" Payment document for
+  // the payer), so including the expense's full amount here would
+  // double-count that portion. Confirmed against live data: a member who
+  // paid 3 expenses in one month had their contribution total overstated by
+  // exactly the sum of their own shares (৳600) because of this.
   const expenseBreakdown: Record<string, number> = {};
   const expenseEntries: { category: string; paidBy: string; amount: number }[] = [];
   let expenseContributions = 0;
+  const member = activeMembers.find((m) => m.id === memberId);
 
   monthExpenses.forEach((expense) => {
     if (expense.paidBy === memberId) {
       const cat = expense.category;
-      expenseBreakdown[cat] = (expenseBreakdown[cat] || 0) + (expense.amount || 0);
-      expenseContributions += expense.amount || 0;
+      const ownShare = member ? calculateMemberShareOfExpense(member, expense, activeMembers, monthAllocations) : 0;
+      const excess = Math.max(0, (expense.amount || 0) - ownShare);
+      expenseBreakdown[cat] = (expenseBreakdown[cat] || 0) + excess;
+      expenseContributions += excess;
       const payerLabel = expense.paidByName || memberName;
-      expenseEntries.push({ category: cat, paidBy: payerLabel, amount: expense.amount || 0 });
+      expenseEntries.push({ category: cat, paidBy: payerLabel, amount: excess });
     }
   });
 
@@ -546,8 +604,14 @@ export function calculateMemberContributions(
     }
   });
 
-  // Total = Bazar + Expense Contributions (bills paid) + Payments Made (direct payments to mess)
-  const totalContribution = bazarContribution + expenseContributions + paymentsMade;
+  // Refunds: money physically returned to the member this month reverses
+  // part of what they're credited with having paid.
+  const refundTotal = monthRefunds
+    .filter((r) => r.memberId === memberId && r.status === "issued")
+    .reduce((sum, r) => sum + (r.amount || 0), 0);
+
+  // Total = Bazar + Expense Contributions (bills paid) + Payments Made (direct payments to mess) - Refunds
+  const totalContribution = bazarContribution + expenseContributions + paymentsMade - refundTotal;
 
   return {
     bazarContribution,
@@ -559,6 +623,7 @@ export function calculateMemberContributions(
     rentPaid,
     mealPaid,
     utilityPaid,
+    refundTotal,
     totalContribution,
   };
 }
@@ -592,53 +657,92 @@ export function calculateMemberCharges(
   previousDeposit: number = 0,
   previousCredit: number = 0,
   monthAllocations: ExpenseAllocation[] = [],
+  hasPreviousClosing: boolean = false,
+  monthCreditNotes: CreditNote[] = [],
 ): MemberCharges {
   const totalMeals = getMemberMealsCount(member.id, monthMeals);
   const mealCost = roundToTwoDecimals(totalMeals * mealRate);
   const rentShare = roundToTwoDecimals(getPerBedRent(member, rooms));
 
-  // Expense shares - prefer using persisted allocations if available
-  let expenseShareBreakdown: Record<string, number> = {};
+  // Expense shares - prefer persisted allocations PER EXPENSE, falling back
+  // to an on-the-fly calculation for any expense that doesn't have one yet
+  // (instead of an all-or-nothing switch for the whole month).
+  const expenseShareBreakdown: Record<string, number> = {};
   let expenseShares = 0;
 
-  if (monthAllocations.length > 0) {
-    // Use persisted expense allocations (preferred method)
-    const allocResult = calculateMemberChargesFromAllocations(member.id, monthAllocations);
-    expenseShareBreakdown = allocResult.expenseShareBreakdown;
-    expenseShares = allocResult.expenseShares;
-  } else {
-    // Fallback: calculate on-the-fly from expenses
-    monthExpenses.forEach((expense) => {
-      const serviceType = getServiceTypeForExpenseCategory(expense.category);
-      let memberShare = 0;
+  const expenseIds = new Set<string>([
+    ...monthExpenses.map((e) => e.id),
+    ...monthAllocations.map((a) => a.expenseId),
+  ]);
 
-      if (serviceType) {
-        const subscribers = activeMembers.filter((m) => isMemberSubscribedToService(m, serviceType)).length || 1;
-        if (isMemberSubscribedToService(member, serviceType)) {
-          memberShare = (expense.amount || 0) / subscribers;
-        }
-      } else {
-        memberShare = (expense.amount || 0) / (activeMembers.length || 1);
-      }
+  expenseIds.forEach((expenseId) => {
+    const allocationsForExpense = monthAllocations.filter((a) => a.expenseId === expenseId);
 
+    if (allocationsForExpense.length > 0) {
+      const memberAlloc = allocationsForExpense.find((a) => a.memberId === member.id);
+      const memberShare = memberAlloc?.amount || 0;
+      const cat = memberAlloc?.category || allocationsForExpense[0].category;
       if (memberShare > 0) {
-        expenseShareBreakdown[expense.category] = roundToTwoDecimals((expenseShareBreakdown[expense.category] || 0) + memberShare);
+        expenseShareBreakdown[cat] = roundToTwoDecimals((expenseShareBreakdown[cat] || 0) + memberShare);
         expenseShares += memberShare;
       }
-    });
-  }
+      return;
+    }
+
+    const expense = monthExpenses.find((e) => e.id === expenseId);
+    if (!expense) return;
+
+    const serviceType = getServiceTypeForExpenseCategory(expense.category);
+    let memberShare = 0;
+
+    if (serviceType && isMemberExplicitlyOptedOut(member, serviceType)) {
+      // Always respect an explicit opt-out on this member.
+    } else if (serviceType) {
+      let subscribers = activeMembers.filter((m) => isMemberSubscribedToService(m, serviceType));
+      if (subscribers.length === 0) {
+        // Nobody has explicitly subscribed — don't let the expense vanish
+        // from everyone's charges. Fall back to every active member who
+        // hasn't explicitly opted out.
+        subscribers = activeMembers.filter((m) => !isMemberExplicitlyOptedOut(m, serviceType));
+        if (subscribers.length === 0) subscribers = activeMembers;
+      }
+      const totalSubscribers = subscribers.length || 1;
+      if (subscribers.some((m) => m.id === member.id)) {
+        memberShare = (expense.amount || 0) / totalSubscribers;
+      }
+    } else {
+      memberShare = (expense.amount || 0) / (activeMembers.length || 1);
+    }
+
+    if (memberShare > 0) {
+      expenseShareBreakdown[expense.category] = roundToTwoDecimals((expenseShareBreakdown[expense.category] || 0) + memberShare);
+      expenseShares += memberShare;
+    }
+  });
 
   // Staff share
   let staffShare = 0;
   staff.filter((s) => s.status !== "inactive").forEach((s) => {
     const serviceType = STAFF_SERVICE_MAP[s.role] || "other_services";
-    const subscribers = activeMembers.filter((m) => isMemberSubscribedToService(m, serviceType)).length || 1;
-    if (isMemberSubscribedToService(member, serviceType)) {
-      staffShare += (s.salary || 0) / subscribers;
+    if (isMemberExplicitlyOptedOut(member, serviceType)) return;
+    let subscribers = activeMembers.filter((m) => isMemberSubscribedToService(m, serviceType));
+    if (subscribers.length === 0) {
+      subscribers = activeMembers.filter((m) => !isMemberExplicitlyOptedOut(m, serviceType));
+      if (subscribers.length === 0) subscribers = activeMembers;
+    }
+    const totalSubscribers = subscribers.length || 1;
+    if (subscribers.some((m) => m.id === member.id)) {
+      // Match the aggregate totalStaffCost formula (salary + overtime + bonus - advance)
+      const staffCost = (s.salary || 0) + (s.overtime || 0) + (s.bonus || 0) - (s.advance || 0);
+      staffShare += staffCost / totalSubscribers;
     }
   });
 
-  const previousDue = member.previousDue || 0;
+  // member.previousDue is a one-time opening balance. Once a monthly closing
+  // exists for the prior month, any unpaid amount is already carried forward
+  // via previousCredit/previousDeposit, so only apply it in the member's
+  // first tracked month — otherwise it would be charged every month forever.
+  const previousDue = hasPreviousClosing ? 0 : (member.previousDue || 0);
 
   // Round all values to 2 decimal places to avoid floating point precision issues
   const roundedExpenseShares = roundToTwoDecimals(expenseShares);
@@ -646,14 +750,22 @@ export function calculateMemberCharges(
   const roundedPreviousDeposit = roundToTwoDecimals(previousDeposit);
   const roundedPreviousCredit = roundToTwoDecimals(previousCredit);
 
-  // Total Charges = Meal Cost + Rent + Expense Shares + Staff Share + Previous Due + Previous Credit - Previous Deposit
+  // Credit notes correct/forgive part of what this member owes — never by
+  // editing the original charge, only by reducing the total here.
+  const creditNoteTotal = roundToTwoDecimals(
+    monthCreditNotes
+      .filter((c) => c.memberId === member.id && c.status === "issued")
+      .reduce((s, c) => s + (c.amount || 0), 0),
+  );
+
+  // Total Charges = Meal Cost + Rent + Expense Shares + Staff Share + Previous Due + Previous Credit - Previous Deposit - Credit Notes
   // Previous Credit: debt carried forward from last month (adds to current charges)
   // Previous Deposit: overpayment carried forward from last month (subtracts from current charges)
   // This follows the PAYMENT APPLICATION ORDER:
   //   1. Previous Credit is reduced first
   //   2. Current Month Charges are paid next
   //   3. Excess becomes Deposit
-  const totalCharges = roundToTwoDecimals(mealCost + rentShare + roundedExpenseShares + roundedStaffShare + previousDue + roundedPreviousCredit - roundedPreviousDeposit);
+  const totalCharges = roundToTwoDecimals(mealCost + rentShare + roundedExpenseShares + roundedStaffShare + previousDue + roundedPreviousCredit - roundedPreviousDeposit - creditNoteTotal);
 
   return {
     mealCost,
@@ -664,6 +776,7 @@ export function calculateMemberCharges(
     previousDue,
     previousDeposit: roundedPreviousDeposit,
     previousCredit: roundedPreviousCredit,
+    creditNoteTotal,
     totalCharges,
     chargeBreakdown: {
       meal: mealCost,
@@ -775,12 +888,16 @@ export function calculateMemberSettlement(
   staff: Staff[] = [],
   prevClosings: Array<{ month: string; memberId: string; deposit: number; credit: number }> = [],
   monthAllocations: ExpenseAllocation[] = [],
+  creditNotes: CreditNote[] = [],
+  refunds: Refund[] = [],
 ): MemberSettlement {
   const monthMeals = mealEntries.filter((m) => m.ym === ym);
   const monthBazar = bazarEntries.filter((b) => b.ym === ym);
   const monthDeposits = deposits.filter((d) => d.ym === ym);
   const monthCredits = credits.filter((c) => c.ym === ym);
   const monthPayments = payments.filter((p) => p.ym === ym);
+  const monthCreditNotes = creditNotes.filter((c) => c.ym === ym);
+  const monthRefunds = refunds.filter((r) => r.ym === ym);
   const allActiveMembers = activeMembers.length > 0 ? activeMembers : [member];
 
   const { mealRate, totalBazar } = calculateMealRate(bazarEntries, mealEntries, ym);
@@ -790,6 +907,9 @@ export function calculateMemberSettlement(
 
   // Get carry forward balances from previous month
   const { previousDeposit, previousCredit } = getPreviousMonthBalances(member.id, ym, prevClosings);
+  const [cfYear, cfMonth] = ym.split("-").map(Number);
+  const cfPrevYm = `${cfMonth === 1 ? cfYear - 1 : cfYear}-${String(cfMonth === 1 ? 12 : cfMonth - 1).padStart(2, "0")}`;
+  const hasPreviousClosing = prevClosings.some((c) => c.month === cfPrevYm && c.memberId === member.id);
 
   // Unified Contribution Formula: Bazar + Expense Contributions + Payments Made
   const contributions = calculateMemberContributions(
@@ -798,6 +918,9 @@ export function calculateMemberSettlement(
     monthBazar,
     monthExpenses,
     monthPayments,
+    monthRefunds,
+    allActiveMembers,
+    monthAllocations,
   );
 
   // Unified Charge Formula with carry forward
@@ -814,6 +937,8 @@ export function calculateMemberSettlement(
     previousDeposit,
     previousCredit,
     monthAllocations,
+    hasPreviousClosing,
+    monthCreditNotes,
   );
 
   // CORRECTED: Net Balance = Total Contributions - Total Charges
@@ -899,6 +1024,8 @@ export function calculateAllSettlements(
   staff: Staff[] = [],
   prevClosings: Array<{ month: string; memberId: string; deposit: number; credit: number }> = [],
   monthAllocations: ExpenseAllocation[] = [],
+  creditNotes: CreditNote[] = [],
+  refunds: Refund[] = [],
 ): MemberSettlement[] {
   const activeMembers = members.filter((m) => m.active);
 
@@ -919,6 +1046,8 @@ export function calculateAllSettlements(
         staff,
         prevClosings,
         monthAllocations,
+        creditNotes,
+        refunds,
       )
     )
     .sort((a, b) => a.memberName.localeCompare(b.memberName));
@@ -967,6 +1096,8 @@ export function computeMonthlySummary(
   monthExpenses: Expense[] = [],
   prevClosings: Array<{ month: string; memberId: string; deposit: number; credit: number }> = [],
   monthAllocations: ExpenseAllocation[] = [],
+  creditNotes: CreditNote[] = [],
+  refunds: Refund[] = [],
 ): MonthlySummary {
   const monthMeals = meals.filter((m) => m.ym === ym);
   const monthBazar = bazar.filter((b) => b.ym === ym);
@@ -1026,6 +1157,8 @@ export function computeMonthlySummary(
     staff,
     prevClosings,
     monthAllocations,
+    creditNotes,
+    refunds,
   );
 
   const settlementSummary = getSettlementSummary(settlements);
@@ -1065,6 +1198,8 @@ export function computeMonthlySummary(
       expenseContributions: settlement.contributions.expenseBreakdown,
       carryForwardDeposit: settlement.carryForwardDeposit,
       carryForwardCredit: settlement.carryForwardCredit,
+      creditNoteTotal: settlement.charges.creditNoteTotal,
+      refundTotal: settlement.contributions.refundTotal,
       creditReason: settlement.creditReason,
       depositSource: settlement.depositSource,
     };
@@ -1172,8 +1307,10 @@ export function calculateMemberLedger(
 
   sortedEntries.forEach((entry, index) => {
     if (index === 0) {
+      // Informational only — the running `balance` below is derived purely
+      // from summing every entry's delta, so it isn't seeded from this
+      // stored value (which would otherwise double-count the first entry).
       openingBalance = entry.balance || 0;
-      balance = openingBalance;
     }
 
     if (chargeTypes.has(entry.transactionType)) {
@@ -1572,10 +1709,10 @@ export function calculateExpenseAllocations(
         break;
       }
       case "fixed":
-        amount = (expense as any).fixedAmount || expense.amount / totalSubscribers;
+        amount = expense.fixedAmount || expense.amount / totalSubscribers;
         break;
       case "custom_percentage":
-        amount = (expense.amount * ((member as any).percentage || 100 / totalSubscribers)) / 100;
+        amount = (expense.amount * (expense.customPercentages?.[member.id] ?? 100 / totalSubscribers)) / 100;
         break;
       case "usage_based":
         amount = expense.amount / totalSubscribers;

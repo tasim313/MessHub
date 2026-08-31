@@ -1,4 +1,4 @@
-import { addDocTo, deleteDocFrom, setDocIn, updateDocIn, findMemberByUid, syncUserRole, type ChangeRequest, type Member } from "./data";
+import { addDocTo, deleteDocFrom, setDocIn, updateDocIn, findMemberByUid, syncUserRole, getDocIn, type ChangeRequest, type Member } from "./data";
 
 export interface ActorInfo {
   uid: string;
@@ -72,6 +72,15 @@ export async function submitChangeRequest(input: {
 }
 
 export async function applyApprovedRequest(request: ChangeRequest, reviewer: ActorInfo, reviewNote?: string) {
+  // Re-read the request fresh and refuse to apply it twice — a double-click
+  // or a slow re-render can otherwise fire this for the same request while
+  // the first call is still in flight, duplicating the create/update/delete
+  // (or re-running a role sync) a second time.
+  const current = await getDocIn<ChangeRequest>("change_requests", request.id);
+  if (!current || current.status !== "pending") {
+    throw new Error("This request has already been reviewed.");
+  }
+
   if (request.action === "create" && request.payload) {
     await addDocTo(request.collectionName, request.payload);
   }
@@ -120,6 +129,11 @@ export async function applyApprovedRequest(request: ChangeRequest, reviewer: Act
 }
 
 export async function rejectRequest(request: ChangeRequest, reviewer: ActorInfo, reviewNote?: string) {
+  const current = await getDocIn<ChangeRequest>("change_requests", request.id);
+  if (!current || current.status !== "pending") {
+    throw new Error("This request has already been reviewed.");
+  }
+
   await setDocIn("change_requests", request.id, {
     status: "rejected",
     reviewNote: reviewNote || "",

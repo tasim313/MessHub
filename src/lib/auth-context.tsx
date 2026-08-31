@@ -62,6 +62,14 @@ async function loadOrCreateProfile(
   u: User,
   nameOverride?: string,
   requestedRole?: Role,
+  /**
+   * Only true when called from an already-authenticated owner's
+   * adminCreateUser action — in that case the requested role comes from a
+   * trusted actor (gated by the /admin page itself, owner-only) and should
+   * be honored as-is. The public signup flow must NEVER trust an arbitrary
+   * self-selected role beyond "manager", to prevent privilege escalation.
+   */
+  trustRequestedRole: boolean = false,
 ): Promise<AppUser> {
   const ref = doc(db, "users", u.uid);
   const snap = await getDoc(ref);
@@ -74,9 +82,11 @@ async function loadOrCreateProfile(
     const isFirst = !ownerSnap.exists();
     const role: Role = isFirst
       ? "owner"
-      : requestedRole === "manager"
-        ? "manager"
-        : "member";
+      : trustRequestedRole && requestedRole
+        ? requestedRole
+        : requestedRole === "manager"
+          ? "manager"
+          : "member";
     profile = {
       uid: u.uid,
       email: u.email,
@@ -225,7 +235,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         password,
       );
       await updateProfile(cred.user, { displayName: name });
-      await loadOrCreateProfile(cred.user, name, role);
+      await loadOrCreateProfile(cred.user, name, role, true);
       await signOut(secondaryAuth);
     },
     loginGoogle: async () => {

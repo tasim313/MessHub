@@ -47,7 +47,10 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isSignedIn();
-      allow create: if isSelf(userId) && hasValidCreateFields();
+      // Self-signup must supply its own createdBy; an owner creating a user
+      // via /admin (adminCreateUser) writes this doc under their own auth
+      // session for a different uid, so hasValidCreateFields() doesn't apply.
+      allow create: if (isSelf(userId) && hasValidCreateFields()) || isOwner();
       allow update: if isSelf(userId) || isOwner();
       allow delete: if isOwner();
     }
@@ -148,6 +151,32 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create: if isSignedIn();
       allow update: if isOwner();
+      allow delete: if isOwner();
+    }
+
+    // Payment <-> charge allocation records (who/what settled which charge).
+    // Written by the same flows that record payments, so mirrors payments/ledgers access.
+    match /charge_allocations/{allocationId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager() || isUser();
+      allow update, delete: if isOwner();
+    }
+
+    // Credit notes and refunds are deliberate financial corrections, not
+    // member self-service records — restricted to owner/manager. Never
+    // deleted; a correction is "voided" via update (status + voidedBy/
+    // voidedReason), preserving the full history of what happened and why.
+    match /credit_notes/{creditNoteId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager();
+      allow update: if isOwnerOrManager();
+      allow delete: if isOwner();
+    }
+
+    match /refunds/{refundId} {
+      allow read: if isSignedIn();
+      allow create: if isOwnerOrManager();
+      allow update: if isOwnerOrManager();
       allow delete: if isOwner();
     }
 

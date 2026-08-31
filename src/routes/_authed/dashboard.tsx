@@ -20,7 +20,7 @@ import { computeMonthly } from "@/lib/calc";
 import { ymKey, bdt } from "@/lib/format";
 import { useMemo } from "react";
 import { EXPENSE_CATEGORY_LABELS } from "@/lib/types";
-import type { MonthlyClosing, ExpenseAllocation, Expense, Advance, AdvanceRecovery } from "@/lib/types";
+import type { MonthlyClosing, ExpenseAllocation, Expense, Advance, AdvanceRecovery, CreditNote, Refund } from "@/lib/types";
 import { useAuth } from "@/lib/auth-context";
 import {
   Utensils,
@@ -81,6 +81,8 @@ function DashboardPage() {
   const { data: allocations } = useCollection<ExpenseAllocation>("expense_allocations", [orderBy("createdAt", "desc")]);
   const { data: advances } = useCollection<Advance>("advances");
   const { data: advanceRecoveries } = useCollection<AdvanceRecovery>("advance_recoveries");
+  const { data: creditNotes } = useCollection<CreditNote>("credit_notes");
+  const { data: refunds } = useCollection<Refund>("refunds");
 
   const currentMember = useMemo(
     () =>
@@ -136,6 +138,8 @@ function DashboardPage() {
         advances,
         advanceRecoveries,
         closings,
+        creditNotes,
+        refunds,
       ),
     [
       ym,
@@ -153,6 +157,8 @@ function DashboardPage() {
       advances,
       advanceRecoveries,
       closings,
+      creditNotes,
+      refunds,
     ],
   );
 
@@ -336,7 +342,7 @@ function DashboardPage() {
             <StatCard label="Vacant Beds" value={String(Math.max(0, totalBeds - occupiedBeds))} icon={BedDouble} hint={`${occupiedBeds} occupied of ${totalBeds}`} />
             <StatCard label="Utility Cost" value={bdt(summary.totalUtilities)} icon={Building2} tone="warning" />
             <StatCard label="Meal Cost" value={bdt(summary.totalBazar)} icon={ShoppingBasket} />
-            <StatCard label="Net P/L" value={bdt(balance)} icon={Activity} tone={balance >= 0 ? "primary" : "danger"} />
+            <StatCard label={balance >= 0 ? "Net Profit" : "Net Loss"} value={bdt(Math.abs(balance))} icon={Activity} tone={balance >= 0 ? "primary" : "danger"} />
           </div>
         )}
 

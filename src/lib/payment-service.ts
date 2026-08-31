@@ -30,6 +30,7 @@ import {
 import { db } from "./firebase";
 import type { Payment, Advance, AdvanceRecovery } from "./types";
 import { processAdvanceRecoveryFromPayment } from "./advance-service";
+import { fetchOutstandingCharges, allocatePaymentToCharges } from "./allocation-service";
 
 // ============================================================================
 // RECORD PAYMENT WITH AUTOMATIC ADVANCE RECOVERY
@@ -42,6 +43,8 @@ export interface PaymentResult {
   chargePaymentAmount: number;
   remainingAmount: number;
   recoveries: { advanceId: string; amount: number; advanceOwnerId: string }[];
+  /** Which specific charges this payment actually settled — the "who paid which charge" trace */
+  chargeAllocations: { chargeId: string; category: string; amount: number }[];
 }
 
 /**
@@ -66,6 +69,8 @@ export async function recordPaymentWithAdvanceRecovery(
   notes?: string,
   referenceId?: string,
   uid?: string,
+  /** If set, this specific charge is settled first, before FIFO across the rest */
+  targetChargeId?: string,
 ): Promise<PaymentResult> {
   // 1. Save the payment record
   const paymentData: Omit<Payment, "id"> = {
@@ -87,39 +92,87 @@ export async function recordPaymentWithAdvanceRecovery(
   const paymentRef = await addDoc(collection(db, "payments"), paymentData);
   const paymentId = paymentRef.id;
 
-  // 2. Process advance recovery from this payment
-  const recoveryResult = await processAdvanceRecoveryFromPayment(
-    paymentId,
-    memberId,
-    memberName,
-    amount,
-    date,
-    ym,
-    uid,
-  );
+  let chargeAllocations: { chargeId: string; category: string; amount: number }[] = [];
+  let stillUnallocated = amount;
+  let advanceRecoveryAmount = 0;
+  let recoveries: { advanceId: string; amount: number; advanceOwnerId: string }[] = [];
 
-  // 3. Record the remaining amount as a charge payment in ledger
-  if (recoveryResult.chargePaymentAmount > 0) {
-    await addDoc(collection(db, "ledgers"), {
-      memberId,
-      memberName,
-      date,
-      ym,
-      transactionType: "payment",
-      category: category || "other",
-      amount: recoveryResult.chargePaymentAmount,
-      notes: notes || `Payment: ${recoveryResult.chargePaymentAmount} Tk via ${method}`,
-      referenceId: paymentId,
-      referenceType: "payment",
-      createdAt: Date.now(),
-      createdBy: uid,
-    });
+  // 2. If the caller explicitly targeted one charge (e.g. "mark this rent
+  // charge as paid"), settle it directly first — this money was earmarked
+  // by the admin for that specific obligation, so it should not be diverted
+  // into recovering an unrelated member's advance before the requested
+  // charge is even marked paid.
+  if (targetChargeId && stillUnallocated > 0.01) {
+    const outstandingCharges = await fetchOutstandingCharges(memberId);
+    const targetCharge = outstandingCharges.find((c) => c.id === targetChargeId);
+    if (targetCharge) {
+      const targetResult = await allocatePaymentToCharges(
+        memberId, paymentId, stillUnallocated, date, ym, [targetCharge], uid,
+      );
+      chargeAllocations = targetResult.allocations;
+      stillUnallocated = targetResult.remaining;
+      if (targetResult.totalAllocated > 0) {
+        await addDoc(collection(db, "ledgers"), {
+          memberId, memberName, date, ym,
+          transactionType: "payment",
+          category: category || targetCharge.category || "other",
+          amount: targetResult.totalAllocated,
+          notes: notes || `Payment for ${targetCharge.category}`,
+          referenceId: paymentId,
+          referenceType: "payment",
+          createdAt: Date.now(),
+          createdBy: uid,
+        });
+      }
+    }
   }
 
-  // 4. If there's remaining amount after all recovery and charge payment,
-  // it becomes a new advance (deposit) for this member
-  if (recoveryResult.remainingAmount > 0.01) {
-    // Record as a deposit/advance for this member
+  // 3. Whatever's left (the whole amount, for an untargeted/general payment,
+  // or any excess beyond the targeted charge) follows the standard order:
+  // recover other members' outstanding advances (FIFO) first, ...
+  if (stillUnallocated > 0.01) {
+    const recoveryResult = await processAdvanceRecoveryFromPayment(
+      paymentId, memberId, memberName, stillUnallocated, date, ym, uid,
+    );
+    advanceRecoveryAmount = recoveryResult.recoveryAmount;
+    recoveries = recoveryResult.recoveries;
+    stillUnallocated = recoveryResult.chargePaymentAmount;
+
+    // ... then apply the remainder to this member's own outstanding charges
+    // (FIFO by date), recorded as real allocations — not a single generic
+    // ledger note — so "which charge did this payment settle" stays
+    // traceable and charges.tsx's paid/pending status stays accurate no
+    // matter which page the payment was recorded from.
+    if (stillUnallocated > 0.01) {
+      const remainingCharges = (await fetchOutstandingCharges(memberId)).filter((c) => c.id !== targetChargeId);
+      const allocResult = await allocatePaymentToCharges(
+        memberId, paymentId, stillUnallocated, date, ym, remainingCharges, uid,
+      );
+      chargeAllocations = [...chargeAllocations, ...allocResult.allocations];
+      stillUnallocated = allocResult.remaining;
+
+      if (allocResult.totalAllocated > 0) {
+        await addDoc(collection(db, "ledgers"), {
+          memberId, memberName, date, ym,
+          transactionType: "payment",
+          category: category || "other",
+          amount: allocResult.totalAllocated,
+          notes: notes || `Payment: ${allocResult.totalAllocated} Tk via ${method} (${allocResult.allocations.length} charge(s) settled)`,
+          referenceId: paymentId,
+          referenceType: "payment",
+          createdAt: Date.now(),
+          createdBy: uid,
+        });
+      }
+    }
+  }
+
+  // 4. Anything left over — either no outstanding charges existed, or the
+  // payment exceeded them — becomes a deposit for this member. Previously
+  // this step only fired on a hardcoded (always-zero) field, so an
+  // overpayment via this path silently never became a visible deposit.
+  const remainingAmount = Math.round((stillUnallocated || 0) * 100) / 100;
+  if (remainingAmount > 0.01) {
     await addDoc(collection(db, "ledgers"), {
       memberId,
       memberName,
@@ -127,8 +180,8 @@ export async function recordPaymentWithAdvanceRecovery(
       ym,
       transactionType: "deposit",
       category: "deposit",
-      amount: recoveryResult.remainingAmount,
-      notes: `Excess payment: ${recoveryResult.remainingAmount} Tk becomes deposit`,
+      amount: remainingAmount,
+      notes: `Excess payment: ${remainingAmount} Tk becomes deposit`,
       referenceId: paymentId,
       referenceType: "payment",
       createdAt: Date.now(),
@@ -139,10 +192,11 @@ export async function recordPaymentWithAdvanceRecovery(
   return {
     paymentId,
     paymentAmount: amount,
-    advanceRecoveryAmount: recoveryResult.recoveryAmount,
-    chargePaymentAmount: recoveryResult.chargePaymentAmount,
-    remainingAmount: recoveryResult.remainingAmount,
-    recoveries: recoveryResult.recoveries,
+    advanceRecoveryAmount,
+    chargePaymentAmount: chargeAllocations.reduce((s, a) => s + a.amount, 0),
+    remainingAmount,
+    recoveries,
+    chargeAllocations,
   };
 }
 

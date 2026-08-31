@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
+import { checkStaffHasAllocations } from "@/lib/duplicate-check";
 
 export const Route = createFileRoute("/_authed/staff")({
   component: StaffPage,
@@ -81,6 +82,7 @@ function StaffPage() {
     orderBy("name", "asc"),
   ]);
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<Staff | null>(null);
   const [search, setSearch] = useState("");
   const [filterRole, setFilterRole] = useState<string>("all");
@@ -144,18 +146,36 @@ function StaffPage() {
 
   const saveStaff = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (saving) return;
     if (!profile) return;
     if (!form.name.trim()) return toast.error("Staff name is required");
+
+    if (!editing) {
+      const nameLower = form.name.trim().toLowerCase();
+      const duplicate = staff.some(
+        (s) =>
+          s.status !== "inactive" &&
+          s.name.trim().toLowerCase() === nameLower &&
+          (!form.role || s.role === form.role),
+      );
+      if (duplicate) {
+        return toast.error(`An active staff member named "${form.name.trim()}" already exists — check for a duplicate entry`);
+      }
+    }
+
     const payload = {
       ...form,
-      salary: Number(form.salary) || 0,
-      advance: Number(form.advance) || 0,
-      overtime: Number(form.overtime) || 0,
-      bonus: Number(form.bonus) || 0,
-      leaveDays: Number(form.leaveDays) || 0,
-      attendanceDays: Number(form.attendanceDays) || 0,
-      paidAmount: Number(form.paidAmount) || 0,
+      // Never trust the HTML min="0" alone — it can be bypassed (devtools,
+      // programmatic form fill). Clamp every figure to a non-negative value.
+      salary: Math.max(0, Number(form.salary) || 0),
+      advance: Math.max(0, Number(form.advance) || 0),
+      overtime: Math.max(0, Number(form.overtime) || 0),
+      bonus: Math.max(0, Number(form.bonus) || 0),
+      leaveDays: Math.max(0, Number(form.leaveDays) || 0),
+      attendanceDays: Math.max(0, Number(form.attendanceDays) || 0),
+      paidAmount: Math.max(0, Number(form.paidAmount) || 0),
     };
+    setSaving(true);
     try {
       if (profile.role === "owner" && editing) {
         await updateDocIn("staff", editing.id, payload);
@@ -179,11 +199,18 @@ function StaffPage() {
       reset();
     } catch (error) {
       toast.error((error as Error).message);
+    } finally {
+      setSaving(false);
     }
   };
 
   const deleteStaff = async (item: Staff) => {
-    if (!profile || !confirm(`Delete ${item.name}?`)) return;
+    if (!profile) return;
+    if (await checkStaffHasAllocations(item.id)) {
+      toast.error(`Cannot delete ${item.name} — past months' charges still reference this staff record. Mark them inactive instead.`);
+      return;
+    }
+    if (!confirm(`Delete ${item.name}?`)) return;
     if (profile.role === "owner") {
       await deleteDocFrom("staff", item.id);
       toast.success("Staff deleted");
@@ -407,7 +434,7 @@ function StaffPage() {
                     />
                   </div>
                   <DialogFooter>
-                    <Button type="submit">Save</Button>
+                    <Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save"}</Button>
                   </DialogFooter>
                 </form>
               </DialogContent>
@@ -433,10 +460,10 @@ function StaffPage() {
           </Card>
           <Card className="p-4">
             <div className="text-xs uppercase text-muted-foreground">
-              Outstanding
+              {payroll.payable - payroll.paid >= 0 ? "Outstanding" : "Overpaid"}
             </div>
             <div className="mt-2 text-2xl font-bold">
-              {bdt(payroll.payable - payroll.paid)}
+              {bdt(Math.abs(payroll.payable - payroll.paid))}
             </div>
           </Card>
         </div>

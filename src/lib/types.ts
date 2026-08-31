@@ -69,6 +69,7 @@ export type TransactionType =
   | "payment"
   | "credit"
   | "refund"
+  | "credit_note"
   | "adjustment"
   | "meal_charge"
   | "rent_charge"
@@ -95,6 +96,7 @@ export type TransactionCategory =
   | "other"
   | "deposit"
   | "credit"
+  | "credit_note"
   | "payment"
   | "bazar_contribution"
   | "food"
@@ -225,6 +227,11 @@ export interface Expense {
   paidByName?: string;
   // Allocation method
   allocationMethod: AllocationMethod;
+  // Fixed amount per member, used when allocationMethod === "fixed"
+  fixedAmount?: number;
+  // Per-member percentage split (memberId -> percent 0-100), used when
+  // allocationMethod === "custom_percentage"
+  customPercentages?: Record<string, number>;
   // Status
   status: ExpenseStatus;
   // Receipt/image URL
@@ -589,6 +596,83 @@ export interface LedgerEntry {
   chargeStatus?: "pending" | "paid" | "partial";
   /** Reference to the payment that cleared this charge */
   paymentReferenceId?: string;
+}
+
+/**
+ * Many-to-many join record between a settling source (a Payment or a
+ * CreditNote) and a charge (a "charge" is a ledgers document with a
+ * chargeType, e.g. meal_charge/rent_charge/etc). One payment/credit note can
+ * settle several charges, and — over time, across partial payments — one
+ * charge can be settled by several sources. This is the single source of
+ * truth for "who/what settled which charge", replacing any single mutable
+ * field (paidAmount/paymentReferenceId) as the record of what happened;
+ * those fields remain as a fast-read cache derived from these allocation
+ * rows.
+ */
+export interface ChargeAllocation {
+  id: string;
+  /** What settled the charge: an actual payment, or a credit note correction */
+  sourceType: "payment" | "credit_note";
+  sourceId: string; // id of the payments or credit_notes document
+  chargeId: string; // id of the ledgers document being settled
+  memberId: string;
+  category: string;
+  amount: number;
+  date: string;
+  ym: string;
+  createdAt?: number;
+  createdBy?: string;
+}
+
+/**
+ * A Credit Note corrects a charge WITHOUT ever editing the original charge
+ * record — it reduces what the member is deemed to owe, with a mandatory
+ * reason, fully auditable. Never delete or backdate-edit a posted charge to
+ * "fix" it; issue a credit note instead.
+ */
+export interface CreditNote {
+  id: string;
+  memberId: string;
+  memberName: string;
+  amount: number; // always > 0 — the amount being forgiven/corrected
+  reason: string; // mandatory
+  category?: string;
+  /** The specific charge this corrects, if any (optional — can be a general credit) */
+  relatedChargeId?: string;
+  date: string;
+  ym: string;
+  status: "issued" | "voided";
+  voidedReason?: string;
+  voidedBy?: string;
+  voidedAt?: number;
+  createdBy?: string;
+  createdAt?: number;
+}
+
+/**
+ * A Refund is money physically returned to a member (e.g. cashing out part
+ * of their held deposit). Distinct from a Credit Note: a credit note forgives
+ * an obligation the member never actually paid; a refund reverses money the
+ * member DID pay. Both are tracked as separate, permanent, auditable records
+ * — never as edits to the original payment/deposit.
+ */
+export interface Refund {
+  id: string;
+  memberId: string;
+  memberName: string;
+  amount: number; // always > 0
+  reason: string; // mandatory
+  method: string; // how the cash was returned (cash, bKash, bank, ...)
+  /** The payment/deposit this refund reverses, if any */
+  relatedPaymentId?: string;
+  date: string;
+  ym: string;
+  status: "issued" | "voided";
+  voidedReason?: string;
+  voidedBy?: string;
+  voidedAt?: number;
+  createdBy?: string;
+  createdAt?: number;
 }
 
 export interface Report {

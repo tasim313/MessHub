@@ -51,6 +51,7 @@ function BazarPage() {
   const [useDateRange, setUseDateRange] = useState<boolean>(false);
 
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<Bazar | null>(null);
   const [form, setForm] = useState({ buyerId: "", date: dayKey(), category: "Vegetables", total: "", notes: "" });
 
@@ -99,10 +100,31 @@ function BazarPage() {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Guard against a double-click/double-submit firing this twice before
+    // the first write finishes — that was silently creating duplicate bazar
+    // entries and duplicate auto-generated "bazar contribution" payments.
+    if (saving) return;
     const buyer = members.find((m) => (m.uid || m.id) === form.buyerId);
     if (!buyer) return toast.error("Pick a buyer");
     const total = parseFloat(form.total);
     if (!total || total <= 0) return toast.error("Enter amount");
+
+    // Detect a likely duplicate (same buyer, date, category, amount) and
+    // show it rather than silently inserting or hard-blocking — a second,
+    // genuinely separate purchase can look identical to a duplicate.
+    if (!editing) {
+      const existing = bazar.find(
+        (b) => b.buyerId === form.buyerId && b.date === form.date && b.category === form.category && Math.abs((b.total || 0) - total) < 0.01,
+      );
+      if (existing) {
+        const confirmed = confirm(
+          `${buyer.name} already has a ${form.category} bazar entry for ${form.date} totaling ৳${existing.total}. Add another one anyway?`,
+        );
+        if (!confirmed) return;
+      }
+    }
+
+    setSaving(true);
     try {
       const payload = {
         buyerId: form.buyerId,
@@ -136,6 +158,7 @@ function BazarPage() {
       setOpen(false);
       resetForm();
     } catch (err) { toast.error((err as Error).message); }
+    finally { setSaving(false); }
   };
 
   const filtered = useMemo(() => {
@@ -248,7 +271,7 @@ function BazarPage() {
                     <div className="space-y-2"><Label>Amount (৳)</Label><Input type="number" min="0" step="0.01" value={form.total} onChange={(e) => setForm({ ...form, total: e.target.value })} required /></div>
                   </div>
                   <div className="space-y-2"><Label>Notes</Label><Textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Details, items, etc." /></div>
-                  <DialogFooter><Button type="submit">Save</Button></DialogFooter>
+                  <DialogFooter><Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save"}</Button></DialogFooter>
                 </form>
               </DialogContent>
             </Dialog>

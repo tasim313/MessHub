@@ -15,11 +15,13 @@ import {
   updateDocIn,
   deleteDocFrom,
   orderBy,
+  where,
   type Member,
   type Room,
   type LedgerEntry,
   type MealEntry,
   type Bazar,
+  type Staff,
 } from "@/lib/data";
 import { ymKey, bdt } from "@/lib/format";
 import { MonthPicker } from "@/components/ui/month-picker";
@@ -27,7 +29,7 @@ import {
   Receipt, DollarSign, Users, Building2, Trash2, Loader2, ArrowUpDown,
   UserRound, BedDouble, CreditCard, PiggyBank, BadgePercent,
   Search, Filter, X, CheckCircle2, CircleDot, AlertCircle,
-  ChevronDown, ChevronUp, WalletIcon,
+  ChevronDown, ChevronUp, WalletIcon, FileMinus2, Undo2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { submitChangeRequest } from "@/lib/workflow";
@@ -36,6 +38,9 @@ import { EXPENSE_CATEGORY_LABELS } from "@/lib/types";
 import { calculateMemberSettlement } from "@/lib/calculations/engine";
 import { isMemberSubscribedToService, getPerBedRent } from "@/lib/calc";
 import { checkLedgerChargeExists, deleteDuplicateCharges } from "@/lib/duplicate-check";
+import { recordPaymentWithAdvanceRecovery } from "@/lib/payment-service";
+import { issueCreditNote, issueRefund, voidCreditNote, voidRefund } from "@/lib/credit-refund-service";
+import type { ChargeAllocation, CreditNote, Refund } from "@/lib/types";
 
 export const Route = createFileRoute("/_authed/charges")({
   component: ChargesPage,
@@ -98,6 +103,7 @@ function ChargesPage() {
 
   const { data: members } = useCollection<Member>("members");
   const { data: rooms } = useCollection<Room>("rooms");
+  const { data: staff } = useCollection<Staff>("staff");
   const { data: expenses } = useCollection<Expense>("expenses", [orderBy("date", "desc")]);
   const { data: meals } = useCollection<MealEntry>("meals", [orderBy("date", "desc")]);
   const { data: bazar } = useCollection<Bazar>("bazar", [orderBy("date", "desc")]);
@@ -107,6 +113,18 @@ function ChargesPage() {
   const { data: credits } = useCollection<Credit>("credits", [orderBy("date", "desc")]);
   const { data: closings } = useCollection<MonthlyClosing>("monthly_closing", [orderBy("createdAt", "desc")]);
   const { data: allocations } = useCollection<ExpenseAllocation>("expense_allocations", [orderBy("createdAt", "desc")]);
+  const { data: chargeAllocations } = useCollection<ChargeAllocation>(
+    "charge_allocations",
+    [where("memberId", "==", selectedMember || "__none__")],
+  );
+  const { data: creditNotes } = useCollection<CreditNote>(
+    "credit_notes",
+    [where("memberId", "==", selectedMember || "__none__")],
+  );
+  const { data: refunds } = useCollection<Refund>(
+    "refunds",
+    [where("memberId", "==", selectedMember || "__none__")],
+  );
 
   const activeMembers = useMemo(
     () => members.filter((m) => m.active).sort((a, b) => a.name.localeCompare(b.name)),
@@ -238,13 +256,40 @@ function ChargesPage() {
     if (!currentMember) return null;
     return calculateMemberSettlement(
       currentMember, ym, meals, bazar, deposits, credits, payments,
-      ledgers, monthExpenses, activeMembers, rooms, [], prevMonthClosings,
+      ledgers, monthExpenses, activeMembers, rooms, staff, prevMonthClosings, monthAllocations,
+      creditNotes, refunds,
     );
-  }, [currentMember, ym, meals, bazar, deposits, credits, payments, ledgers, monthExpenses, activeMembers, rooms, prevMonthClosings]);
+  }, [currentMember, ym, meals, bazar, deposits, credits, payments, ledgers, monthExpenses, activeMembers, rooms, staff, prevMonthClosings, monthAllocations, creditNotes, refunds]);
 
   const memberEntries = ledgers
     .filter((e) => e.memberId === selectedMember && e.ym === ym)
     .sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || 0) - (b.createdAt || 0));
+
+  /**
+   * Settlement trace: for every charge this member has had this month, which
+   * payment(s) actually settled it, and how much of each. This is the
+   * concrete "who paid which charge, and what was the final settlement"
+   * answer — sourced from the charge_allocations join records rather than
+   * a single mutable paidAmount field on the charge.
+   */
+  const settlementTrace = useMemo(() => {
+    const paymentsById = new Map(payments.map((p) => [p.id, p]));
+    const creditNotesById = new Map(creditNotes.map((c) => [c.id, c]));
+    return memberCharges.map((charge) => {
+      const rows = chargeAllocations
+        .filter((a) => a.chargeId === charge.id)
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+        .map((a) => ({
+          allocationId: a.id,
+          amount: a.amount,
+          date: a.date,
+          sourceType: a.sourceType,
+          payment: a.sourceType === "payment" ? paymentsById.get(a.sourceId) : undefined,
+          creditNote: a.sourceType === "credit_note" ? creditNotesById.get(a.sourceId) : undefined,
+        }));
+      return { charge, rows, totalAllocated: rows.reduce((s, r) => s + r.amount, 0) };
+    });
+  }, [memberCharges, chargeAllocations, payments, creditNotes]);
 
   /**
     * Generate charges from current month's data and save them as individual ledger entries.
@@ -387,58 +432,41 @@ function ChargesPage() {
    * Mark a specific charge as paid by linking it to a payment.
    * This soft-deletes the charge from the active view.
    */
+  /**
+   * Every payment recorded from this page goes through the SAME pipeline as
+   * the /payments page (recordPaymentWithAdvanceRecovery): advance recovery,
+   * then allocation to real outstanding charges (recorded as traceable
+   * charge_allocations rows), then any excess becomes a deposit. This is
+   * what makes "who paid which charge, and what was the final settlement"
+   * answerable — previously this page only touched a charge's paidAmount
+   * field directly and never recovered advances at all.
+   */
+  // Every mutating action on this page shares the one `saving` flag: a
+  // double-click firing two concurrent payment/credit-note/refund writes is
+  // a real financial duplication risk, not just a cosmetic annoyance, so all
+  // buttons below are disabled while ANY one of them is in flight.
   const handlePayCharge = async (chargeEntry: any) => {
-    if (!currentMember || !profile) return;
+    if (!currentMember || !profile || saving) return;
     const amount = chargeEntry.dueAmount || chargeEntry.amount;
+    setSaving(true);
     try {
       const date = new Date().toISOString().slice(0, 10);
-      const paymentNotes = `Payment for ${chargeEntry.chargeLabel}`;
-
-      // Record the payment
-      const paymentRef = await addDocTo("payments", {
-        memberId: currentMember.id,
-        memberName: currentMember.name,
-        amount,
-        method: "Cash",
-        date,
-        ym,
-        status: "paid",
-        category: chargeEntry.category,
-        notes: paymentNotes,
-        createdAt: Date.now(),
-      });
-
-      // Update the charge entry as paid
-      await updateDocIn("ledgers", chargeEntry.id, {
-        chargeStatus: "paid",
-        paidAmount: amount,
-        paymentReferenceId: paymentRef.id,
-      });
-
-      // Record in ledger as payment
-      await addDocTo("ledgers", {
-        memberId: currentMember.id,
-        memberName: currentMember.name,
-        date,
-        ym,
-        transactionType: "payment",
-        category: chargeEntry.category,
-        amount,
-        notes: paymentNotes,
-        referenceId: paymentRef,
-        referenceType: "payment",
-        createdAt: Date.now(),
-      });
-
+      await recordPaymentWithAdvanceRecovery(
+        currentMember.id, currentMember.name, amount, "Cash", date, ym,
+        chargeEntry.category, `Payment for ${chargeEntry.chargeLabel}`,
+        undefined, profile.uid, chargeEntry.id,
+      );
       toast.success(`${chargeEntry.chargeLabel}: ${bdt(amount)} paid`);
     } catch (err) {
       toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleRecordPayment = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!currentMember || !profile) return;
+    if (!currentMember || !profile || saving) return;
     const form = e.target as HTMLFormElement;
     const amount = parseFloat((form.elements.namedItem("amount") as HTMLInputElement).value);
     const method = (form.elements.namedItem("method") as HTMLSelectElement).value;
@@ -447,176 +475,156 @@ function ChargesPage() {
     const targetChargeId = (form.elements.namedItem("targetCharge") as HTMLSelectElement).value;
     const notes = (form.elements.namedItem("notes") as HTMLTextAreaElement).value;
     if (!amount || amount <= 0) return toast.error("Enter amount");
+
+    // Detect a likely duplicate (same member+date+amount) and show it
+    // rather than silently inserting or hard-blocking — require an explicit
+    // confirmation before it's actually recorded.
+    const existingPayment = payments.find(
+      (p) => p.memberId === currentMember.id && p.date === date && Math.abs(p.amount - amount) < 0.01,
+    );
+    if (existingPayment) {
+      const confirmed = confirm(
+        `${currentMember.name} already has a payment of ৳${existingPayment.amount} recorded on ${date}. Add another one anyway?`,
+      );
+      if (!confirmed) return;
+    }
+
+    setSaving(true);
     try {
-      // If a specific charge is targeted, pay that charge
-      if (targetChargeId && targetChargeId !== "__all__") {
-        const charge = memberCharges.find((c) => c.id === targetChargeId);
-        if (charge) {
-          const paymentNotes = notes || `Payment for ${charge.chargeLabel} via ${method}`;
-          const paymentRef = await addDocTo("payments", {
-            memberId: currentMember.id,
-            memberName: currentMember.name,
-            amount,
-            method,
-            date,
-            ym,
-            status: "paid",
-            category: charge.category,
-            notes: paymentNotes,
-            createdAt: Date.now(),
-          });
+      const isTargeted = targetChargeId && targetChargeId !== "__all__";
+      const charge = isTargeted ? memberCharges.find((c) => c.id === targetChargeId) : undefined;
+      const result = await recordPaymentWithAdvanceRecovery(
+        currentMember.id, currentMember.name, amount, method, date, ym,
+        charge?.category || category,
+        notes || (charge ? `Payment for ${charge.chargeLabel} via ${method}` : `Payment via ${method}`),
+        undefined, profile.uid, charge?.id,
+      );
 
-          // Mark the charge as paid
-          const newPaidAmount = (charge.paidAmount || 0) + amount;
-          const newStatus = newPaidAmount >= charge.amount ? "paid" : "partial";
-          await updateDocIn("ledgers", charge.id, {
-            chargeStatus: newStatus,
-            paidAmount: newPaidAmount,
-            paymentReferenceId: paymentRef.id,
-          });
-
-          // Record in ledger
-          await addDocTo("ledgers", {
-            memberId: currentMember.id,
-            memberName: currentMember.name,
-            date,
-            ym,
-            transactionType: "payment",
-            category: charge.category,
-            amount,
-            notes: paymentNotes,
-            referenceId: paymentRef,
-            referenceType: "payment",
-            createdAt: Date.now(),
-          });
-
-          toast.success(`Payment recorded for ${charge.chargeLabel}`);
-        }
-      } else {
-        // General payment (not linked to a specific charge)
-        const paymentNotes = notes || `Payment via ${method}`;
-        const paymentRef = await addDocTo("payments", {
-          memberId: currentMember.id,
-          memberName: currentMember.name,
-          amount,
-          method,
-          date,
-          ym,
-          status: "paid",
-          category,
-          notes: paymentNotes,
-          createdAt: Date.now(),
-        });
-
-        // Try to auto-allocate payment to pending charges (FIFO)
-        let remainingAmount = amount;
-        for (const charge of pendingCharges) {
-          if (remainingAmount <= 0) break;
-          const dueAmount = charge.dueAmount;
-          const payAmount = Math.min(remainingAmount, dueAmount);
-          if (payAmount > 0) {
-            const newPaidAmount = (charge.paidAmount || 0) + payAmount;
-            const newStatus = newPaidAmount >= charge.amount ? "paid" : "partial";
-            await updateDocIn("ledgers", charge.id, {
-              chargeStatus: newStatus,
-              paidAmount: newPaidAmount,
-              paymentReferenceId: paymentRef.id,
-            });
-            remainingAmount -= payAmount;
-          }
-        }
-
-        // Record in ledger
-        await addDocTo("ledgers", {
-          memberId: currentMember.id,
-          memberName: currentMember.name,
-          date,
-          ym,
-          transactionType: "payment",
-          category,
-          amount,
-          notes: paymentNotes,
-          referenceId: paymentRef,
-          referenceType: "payment",
-          createdAt: Date.now(),
-        });
-
-        toast.success(`Payment recorded${remainingAmount < amount ? ` (${bdt(remainingAmount)} excess)` : ""}`);
-      }
+      const settledCount = result.chargeAllocations.length;
+      let msg = charge ? `Payment recorded for ${charge.chargeLabel}` : "Payment recorded";
+      if (settledCount > 0) msg += ` (${settledCount} charge${settledCount > 1 ? "s" : ""} settled)`;
+      if (result.advanceRecoveryAmount > 0) msg += `, ${bdt(result.advanceRecoveryAmount)} recovered advances`;
+      if (result.remainingAmount > 0) msg += `, ${bdt(result.remainingAmount)} excess becomes deposit`;
+      toast.success(msg);
       form.reset();
     } catch (err) {
       toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleQuickPayment = async (amount: number, notes: string, category: string, chargeId?: string) => {
-    if (!currentMember || !profile || !amount || amount <= 0) return;
+    if (!currentMember || !profile || !amount || amount <= 0 || saving) return;
+    setSaving(true);
     try {
       const date = new Date().toISOString().slice(0, 10);
-
-      // Record payment
-      const paymentRef = await addDocTo("payments", {
-        memberId: currentMember.id,
-        memberName: currentMember.name,
-        amount,
-        method: "Cash",
-        date,
-        ym,
-        status: "paid",
-        category,
-        notes,
-        createdAt: Date.now(),
-      });
-
-      // If linked to a specific charge, mark it
-      if (chargeId) {
-        const charge = memberCharges.find((c) => c.id === chargeId);
-        if (charge) {
-          const newPaidAmount = (charge.paidAmount || 0) + amount;
-          const newStatus = newPaidAmount >= charge.amount ? "paid" : "partial";
-          await updateDocIn("ledgers", charge.id, {
-            chargeStatus: newStatus,
-            paidAmount: newPaidAmount,
-            paymentReferenceId: paymentRef.id,
-          });
-        }
-      } else {
-        // Try to auto-allocate to pending charges
-        let remainingAmount = amount;
-        for (const charge of pendingCharges) {
-          if (remainingAmount <= 0) break;
-          const payAmount = Math.min(remainingAmount, charge.dueAmount);
-          if (payAmount > 0) {
-            const newPaidAmount = (charge.paidAmount || 0) + payAmount;
-            const newStatus = newPaidAmount >= charge.amount ? "paid" : "partial";
-            await updateDocIn("ledgers", charge.id, {
-              chargeStatus: newStatus,
-              paidAmount: newPaidAmount,
-              paymentReferenceId: paymentRef.id,
-            });
-            remainingAmount -= payAmount;
-          }
-        }
-      }
-
-      // Record in ledger
-      await addDocTo("ledgers", {
-        memberId: currentMember.id,
-        memberName: currentMember.name,
-        date,
-        ym,
-        transactionType: "payment",
-        category: category as any,
-        amount,
-        notes,
-        referenceId: paymentRef,
-        referenceType: "payment",
-        createdAt: Date.now(),
-      });
-
+      const charge = chargeId ? memberCharges.find((c) => c.id === chargeId) : undefined;
+      await recordPaymentWithAdvanceRecovery(
+        currentMember.id, currentMember.name, amount, "Cash", date, ym,
+        charge?.category || category, notes, undefined, profile.uid, charge?.id,
+      );
       toast.success(`${notes}: ${bdt(amount)} recorded`);
     } catch (err) {
       toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /**
+   * Credit note: corrects/forgives part of what the member owes. Never
+   * edits the original charge — records a separate, reasoned correction
+   * that reduces their outstanding balance.
+   */
+  const handleIssueCreditNote = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!currentMember || !profile || saving) return;
+    const form = e.target as HTMLFormElement;
+    const amount = parseFloat((form.elements.namedItem("cnAmount") as HTMLInputElement).value);
+    const reason = (form.elements.namedItem("cnReason") as HTMLTextAreaElement).value;
+    const targetChargeId = (form.elements.namedItem("cnTargetCharge") as HTMLSelectElement).value;
+    if (!amount || amount <= 0) return toast.error("Enter an amount greater than zero");
+    if (!reason.trim()) return toast.error("A reason is required to issue a credit note");
+    setSaving(true);
+    try {
+      const charge = targetChargeId && targetChargeId !== "__none__" ? memberCharges.find((c) => c.id === targetChargeId) : undefined;
+      const date = new Date().toISOString().slice(0, 10);
+      await issueCreditNote(
+        currentMember.id, currentMember.name, amount, reason, ym, date,
+        { uid: profile.uid, name: profile.name, role: profile.role },
+        charge?.category, charge?.id,
+      );
+      toast.success(`Credit note of ${bdt(amount)} issued to ${currentMember.name}`);
+      form.reset();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /**
+   * Refund: physically returns money to the member (e.g. cashing out part
+   * of a held deposit). Capped at what's actually available so the mess
+   * can never refund more than it holds for this member.
+   */
+  const handleIssueRefund = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!currentMember || !profile || !memberSettlement || saving) return;
+    const form = e.target as HTMLFormElement;
+    const amount = parseFloat((form.elements.namedItem("rfAmount") as HTMLInputElement).value);
+    const reason = (form.elements.namedItem("rfReason") as HTMLTextAreaElement).value;
+    const method = (form.elements.namedItem("rfMethod") as HTMLSelectElement).value;
+    if (!amount || amount <= 0) return toast.error("Enter an amount greater than zero");
+    if (!reason.trim()) return toast.error("A reason is required to issue a refund");
+    const availableDeposit = memberSettlement.totalDeposit;
+    if (amount > availableDeposit + 0.01) {
+      return toast.error(`Cannot refund ${bdt(amount)} — ${currentMember.name} only has ${bdt(availableDeposit)} available as deposit`);
+    }
+    setSaving(true);
+    try {
+      const date = new Date().toISOString().slice(0, 10);
+      await issueRefund(
+        currentMember.id, currentMember.name, amount, reason, method, ym, date,
+        { uid: profile.uid, name: profile.name, role: profile.role },
+      );
+      toast.success(`Refund of ${bdt(amount)} issued to ${currentMember.name}`);
+      form.reset();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleVoidCreditNote = async (note: CreditNote) => {
+    if (!profile || saving) return;
+    const reason = prompt(`Reason for voiding this ৳${note.amount} credit note?`);
+    if (!reason || !reason.trim()) return;
+    setSaving(true);
+    try {
+      await voidCreditNote(note.id, reason, { uid: profile.uid, name: profile.name, role: profile.role });
+      toast.success("Credit note voided");
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleVoidRefund = async (refund: Refund) => {
+    if (!profile || saving) return;
+    const reason = prompt(`Reason for voiding this ৳${refund.amount} refund?`);
+    if (!reason || !reason.trim()) return;
+    setSaving(true);
+    try {
+      await voidRefund(refund.id, reason, { uid: profile.uid, name: profile.name, role: profile.role });
+      toast.success("Refund voided");
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -822,6 +830,7 @@ function ChargesPage() {
                                     size="sm"
                                     variant="outline"
                                     className="h-8 text-xs"
+                                    disabled={saving}
                                     onClick={() => handlePayCharge(charge)}
                                   >
                                     Pay {bdt(charge.dueAmount)}
@@ -869,7 +878,7 @@ function ChargesPage() {
                 <div className="border-t pt-3 flex justify-between font-bold text-lg">
                   <span>Net Balance</span>
                   <span className={memberSettlement.balance >= 0 ? "text-primary" : "text-destructive"}>
-                    {memberSettlement.balance >= 0 ? "+" : ""}{bdt(memberSettlement.balance)}
+                    {memberSettlement.balance >= 0 ? "Deposit " : "Due "}{bdt(Math.abs(memberSettlement.balance))}
                   </span>
                 </div>
               </div>
@@ -971,6 +980,7 @@ function ChargesPage() {
                             step="0.01"
                             placeholder="৳ amount"
                             required
+                            disabled={saving}
                             className="w-full text-sm bg-transparent border-b border-dashed outline-none tabular-nums"
                           />
                         </div>
@@ -1020,10 +1030,123 @@ function ChargesPage() {
                     <label className="text-sm font-medium">Notes</label>
                     <Textarea name="notes" rows={2} placeholder="Optional notes" />
                   </div>
-                  <Button type="submit" className="w-full">Record Payment</Button>
+                  <Button type="submit" className="w-full" disabled={saving}>{saving ? "Saving..." : "Record Payment"}</Button>
                 </form>
               </details>
             </Card>
+
+            {/* CREDIT NOTES & REFUNDS — corrections that never edit a posted charge/payment */}
+            {(profile?.role === "owner" || profile?.role === "manager") && (
+            <Card className="p-5">
+              <h3 className="font-semibold text-lg mb-1 flex items-center gap-2"><FileMinus2 className="h-5 w-5" />Credit Notes & Refunds</h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                Corrections are never made by editing a posted charge or payment — issue a credit note (forgives an amount never actually owed) or a refund (returns money the member did pay), each with a mandatory reason and a full audit trail.
+              </p>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <details className="border rounded-lg p-4">
+                  <summary className="text-sm font-medium cursor-pointer flex items-center gap-1.5">
+                    <FileMinus2 className="h-4 w-4" />Issue Credit Note
+                  </summary>
+                  <form onSubmit={handleIssueCreditNote} className="space-y-3 mt-4">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Amount (৳)</label>
+                      <Input type="number" name="cnAmount" min="0.01" step="0.01" placeholder="Enter amount" required />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Correct a specific charge</label>
+                      <Select name="cnTargetCharge" defaultValue="__none__">
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">-- General credit (FIFO across charges) --</SelectItem>
+                          {memberCharges.map((charge) => (
+                            <SelectItem key={charge.id} value={charge.id}>
+                              {charge.chargeLabel} - {bdt(charge.dueAmount)} due
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Reason (required)</label>
+                      <Textarea name="cnReason" rows={2} placeholder="Why is this charge being corrected?" required />
+                    </div>
+                    <Button type="submit" variant="outline" className="w-full" disabled={saving}>{saving ? "Saving..." : "Issue Credit Note"}</Button>
+                  </form>
+                </details>
+
+                <details className="border rounded-lg p-4">
+                  <summary className="text-sm font-medium cursor-pointer flex items-center gap-1.5">
+                    <Undo2 className="h-4 w-4" />Issue Refund
+                  </summary>
+                  <form onSubmit={handleIssueRefund} className="space-y-3 mt-4">
+                    <p className="text-xs text-muted-foreground">
+                      Available to refund: <span className="font-semibold text-primary">{bdt(memberSettlement?.totalDeposit || 0)}</span>
+                    </p>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Amount (৳)</label>
+                      <Input type="number" name="rfAmount" min="0.01" step="0.01" max={memberSettlement?.totalDeposit || 0} placeholder="Enter amount" required />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Method</label>
+                      <Select name="rfMethod" defaultValue="Cash">
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>{METHODS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Reason (required)</label>
+                      <Textarea name="rfReason" rows={2} placeholder="Why is this being refunded?" required />
+                    </div>
+                    <Button type="submit" variant="outline" className="w-full" disabled={saving || !memberSettlement || memberSettlement.totalDeposit <= 0}>{saving ? "Saving..." : "Issue Refund"}</Button>
+                  </form>
+                </details>
+              </div>
+
+              {(creditNotes.length > 0 || refunds.length > 0) && (
+                <div className="mt-5 space-y-2">
+                  {creditNotes.filter((c) => c.ym === ym).map((note) => (
+                    <div key={note.id} className="flex items-center justify-between gap-2 rounded-lg border p-3 text-sm">
+                      <div className="min-w-0">
+                        <div className="font-medium flex items-center gap-2">
+                          <FileMinus2 className="h-3.5 w-3.5 text-muted-foreground" />
+                          Credit note {bdt(note.amount)}
+                          <Badge variant="outline" className={`text-[10px] ${note.status === "voided" ? "bg-destructive/10 text-destructive" : ""}`}>
+                            {note.status}
+                          </Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate">{note.reason}</div>
+                      </div>
+                      {note.status === "issued" && profile && (
+                        <Button size="sm" variant="ghost" disabled={saving} onClick={() => handleVoidCreditNote(note)}>
+                          <Undo2 className="h-3.5 w-3.5 mr-1" />Void
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  {refunds.filter((r) => r.ym === ym).map((refund) => (
+                    <div key={refund.id} className="flex items-center justify-between gap-2 rounded-lg border p-3 text-sm">
+                      <div className="min-w-0">
+                        <div className="font-medium flex items-center gap-2">
+                          <Undo2 className="h-3.5 w-3.5 text-muted-foreground" />
+                          Refund {bdt(refund.amount)} via {refund.method}
+                          <Badge variant="outline" className={`text-[10px] ${refund.status === "voided" ? "bg-destructive/10 text-destructive" : ""}`}>
+                            {refund.status}
+                          </Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate">{refund.reason}</div>
+                      </div>
+                      {refund.status === "issued" && profile && (
+                        <Button size="sm" variant="ghost" disabled={saving} onClick={() => handleVoidRefund(refund)}>
+                          <Undo2 className="h-3.5 w-3.5 mr-1" />Void
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+            )}
 
             {/* TRANSACTION HISTORY */}
             <Card className="p-5">
@@ -1079,6 +1202,62 @@ function ChargesPage() {
                                 </Button>
                               </td>
                             )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+
+            {/* FINAL SETTLEMENT TRACE — which payment(s) settled which charge */}
+            <Card className="p-5">
+              <h3 className="font-semibold text-lg mb-1 flex items-center gap-2"><ArrowUpDown className="h-5 w-5" />Settlement Trace</h3>
+              <p className="text-sm text-muted-foreground mb-4">Every charge this month and exactly which payment(s) settled it — the final answer to "who paid this, and how much is still owed."</p>
+              {settlementTrace.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">No charges for this month yet</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="text-xs uppercase text-muted-foreground bg-muted/50">
+                      <tr>
+                        <th className="text-left p-3 font-medium">Charge</th>
+                        <th className="text-right p-3 font-medium">Amount</th>
+                        <th className="text-left p-3 font-medium">Settled By</th>
+                        <th className="text-right p-3 font-medium">Paid</th>
+                        <th className="text-right p-3 font-medium">Still Due</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {settlementTrace.map(({ charge, rows, totalAllocated }) => {
+                        const stillDue = Math.max(0, charge.amount - totalAllocated);
+                        return (
+                          <tr key={charge.id} className="border-t align-top">
+                            <td className="p-3 font-medium">{charge.chargeLabel}</td>
+                            <td className="p-3 text-right tabular-nums">{bdt(charge.amount)}</td>
+                            <td className="p-3">
+                              {rows.length === 0 ? (
+                                <span className="text-xs text-muted-foreground">Not yet paid</span>
+                              ) : (
+                                <div className="space-y-1">
+                                  {rows.map((r) => (
+                                    <div key={r.allocationId} className="text-xs flex items-center gap-1.5">
+                                      <Badge variant="outline" className="text-[10px]">{r.date}</Badge>
+                                      <span className="text-muted-foreground">
+                                        {r.sourceType === "credit_note"
+                                          ? "Credit note"
+                                          : r.payment ? `${r.payment.method} payment` : "Payment"} — {bdt(r.amount)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                            <td className="p-3 text-right tabular-nums text-primary font-medium">{bdt(totalAllocated)}</td>
+                            <td className={`p-3 text-right tabular-nums font-semibold ${stillDue > 0.01 ? "text-destructive" : "text-muted-foreground"}`}>
+                              {bdt(stillDue)}
+                            </td>
                           </tr>
                         );
                       })}

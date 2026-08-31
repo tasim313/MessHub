@@ -77,14 +77,23 @@ export const generateMonthlyBills = functions.pubsub
 
     for (const utility of utilities) {
       const utilityData = utility as { id?: string; amount?: number; type?: string };
-      const amountPerMember = members.length > 0 ? (utilityData.amount || 0) / members.length : 0;
+
+      // Split only among members actually subscribed to this service — not
+      // all active members — otherwise the bill is under-billed whenever
+      // fewer members are subscribed than the total member count.
+      let subscribedMembers = members.filter((member) => {
+        const memberData = member as { services?: { type: string; enabled: boolean }[] };
+        return memberData.services?.some((s) => s.type === utilityData.type && s.enabled);
+      });
+      if (utilityData.type === "others" || subscribedMembers.length === 0) {
+        subscribedMembers = members;
+      }
+      const amountPerMember = subscribedMembers.length > 0 ? (utilityData.amount || 0) / subscribedMembers.length : 0;
 
       for (const member of members) {
         const memberData = member as { id?: string; name?: string; services?: { type: string; enabled: boolean }[] };
-        const isSubscribed = memberData.services?.some(
-          (s) => s.type === utilityData.type && s.enabled,
-        );
-        if (!isSubscribed && utilityData.type !== "others") continue;
+        const isSubscribed = subscribedMembers.some((m) => (m as { id?: string }).id === memberData.id);
+        if (!isSubscribed) continue;
 
         // Use composite ID for idempotency: {utilityId}_{memberId}
         const allocationRef = db.collection("utility_allocations").doc(`${utilityData.id}_${memberData.id}`);
@@ -96,7 +105,7 @@ export const generateMonthlyBills = functions.pubsub
             memberName: memberData.name || "",
             amount: Math.round(amountPerMember * 100) / 100,
             allocationMethod: "equal",
-            subscribed: isSubscribed !== false,
+            subscribed: isSubscribed,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             createdBy: "system",
           });
@@ -109,18 +118,21 @@ export const generateMonthlyBills = functions.pubsub
     const staffList = staffSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 
     for (const staff of staffList) {
-      const staffData = staff as { id?: string; name?: string; salary?: number; role?: string };
-      const salary = staffData.salary || 0;
+      const staffData = staff as { id?: string; name?: string; salary?: number; overtime?: number; bonus?: number; advance?: number; role?: string };
+      const salary = (staffData.salary || 0) + (staffData.overtime || 0) + (staffData.bonus || 0) - (staffData.advance || 0);
       if (salary <= 0) continue;
 
-      const amountPerMember = members.length > 0 ? salary / members.length : 0;
+      const serviceType = getServiceTypeForStaffRole(staffData.role || "");
+      let subscribedMembers = members.filter((member) => {
+        const memberData = member as { services?: { type: string; enabled: boolean }[] };
+        return memberData.services?.some((s) => s.type === serviceType && s.enabled);
+      });
+      if (subscribedMembers.length === 0) subscribedMembers = members;
+      const amountPerMember = subscribedMembers.length > 0 ? salary / subscribedMembers.length : 0;
 
       for (const member of members) {
         const memberData = member as { id?: string; name?: string; services?: { type: string; enabled: boolean }[] };
-        const serviceType = getServiceTypeForStaffRole(staffData.role || "");
-        const isSubscribed = memberData.services?.some(
-          (s) => s.type === serviceType && s.enabled,
-        );
+        const isSubscribed = subscribedMembers.some((m) => (m as { id?: string }).id === memberData.id);
         if (!isSubscribed) continue;
 
         // Use composite ID for idempotency: {staffId}_{memberId}_{month}
